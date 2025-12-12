@@ -135,17 +135,6 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
   };
 
   const triggerScan = () => {
-     // We can just ask the model via audio/text injection, or assume the user asks verbally.
-     // To make the button functional without speaking, we can technically inject a text prompt
-     // if the Live API supported direct text injection easily, but usually it's audio-driven.
-     // For this UX, we'll let the user know they are in 'Scan Mode' or provide a visual cue.
-     // However, a simpler way to force a scan via button is simulating a user message.
-     // Since Live API is primarily audio/realtime, we'll use the button to provide Visual Feedback
-     // and maybe play a sound, but rely on the user saying "Scan this" OR
-     // if possible, send a text control message (experimental). 
-     
-     // Workaround: We will just flash a message "Listening for 'Scan this'..." 
-     // A cooler implementation is to just prompt the user to Speak.
      setFeedbackMessage("Say 'Scan this' to analyze");
      if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
      feedbackTimeoutRef.current = setTimeout(() => setFeedbackMessage(null), 3000);
@@ -243,7 +232,15 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
       inputAnalyserRef.current = inputAudioContextRef.current.createAnalyser();
       inputAnalyserRef.current.fftSize = 512;
 
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: true });
+      // Enable native browser audio processing features
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: true 
+      });
       streamRef.current = stream;
       stream.getAudioTracks().forEach(track => { track.enabled = isMicOnRef.current; });
 
@@ -260,6 +257,8 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
           outputAudioTranscription: {},
           systemInstruction: `You are Alexis, a warm and helpful AI companion.
           Greet the user: ${user.name}.
+          
+          CRITICAL INSTRUCTION: Listen patiently. The user may pause while thinking. Do NOT interrupt until they have finished their full sentence or question.
           
           You have two main modes of help:
           1. WEB SEARCH: If asked to search, use 'search_web'.
@@ -285,18 +284,41 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
             
             if (inputAudioContextRef.current && streamRef.current) {
               const source = inputAudioContextRef.current.createMediaStreamSource(streamRef.current);
-              const scriptProcessor = inputAudioContextRef.current.createScriptProcessor(4096, 1, 1);
+              
+              // Mild Gain Boost (AGC handles most of it, but this ensures quiet speech is picked up)
+              const gainNode = inputAudioContextRef.current.createGain();
+              gainNode.gain.value = 1.1; 
+              
+              const scriptProcessor = inputAudioContextRef.current.createScriptProcessor(2048, 1, 1);
               
               scriptProcessor.onaudioprocess = (e) => {
                 if (!isMicOnRef.current) return;
                 const inputData = e.inputBuffer.getChannelData(0);
+                
+                // NOISE GATE Implementation
+                // Calculate RMS (Root Mean Square) to detect volume level
+                let sum = 0;
+                for (let i = 0; i < inputData.length; i++) {
+                  sum += inputData[i] * inputData[i];
+                }
+                const rms = Math.sqrt(sum / inputData.length);
+                
+                // If the audio is too quiet (background noise), mute it.
+                // 0.01 is a reasonable threshold for silence/hiss.
+                if (rms < 0.01) {
+                  inputData.fill(0);
+                }
+
                 const pcmBlob = createPcmBlob(inputData);
                 sessionPromise.then((session) => {
                   try { session.sendRealtimeInput({ media: pcmBlob }); } catch (e) { console.warn("Error sending audio", e); }
                 });
               };
-              source.connect(inputAnalyserRef.current!);
-              source.connect(scriptProcessor);
+              
+              source.connect(gainNode);
+              gainNode.connect(inputAnalyserRef.current!);
+              gainNode.connect(scriptProcessor);
+              
               const silence = inputAudioContextRef.current.createGain();
               silence.gain.value = 0;
               scriptProcessor.connect(silence);
