@@ -3,9 +3,10 @@ import { UserProfile, SearchResult } from '../types';
 import { GoogleGenAI, LiveServerMessage, Modality, FunctionDeclaration, Type } from '@google/genai';
 import { Visualizer } from './Visualizer';
 import { HoloCard, HoloData } from './HoloCard';
-import { Mic, MicOff, Video, VideoOff, LayoutGrid, X, RotateCcw, AlertCircle, Square, ScanEye, Radio } from 'lucide-react';
+import { Mic, MicOff, Video, VideoOff, LayoutGrid, X, RotateCcw, AlertCircle, Square, ScanEye, Globe, Sparkles, ExternalLink, ArrowRight, Hand, ThumbsDown, MousePointerClick, ChevronUp, ChevronDown } from 'lucide-react';
 import { createPcmBlob, decodeAudioData, blobToBase64, base64ToUint8Array } from '../utils/audio-utils';
 import { performWebSearch } from '../services/gemini';
+import { initializeGestureRecognizer, detectGesture } from '../services/gestureService';
 import ReactMarkdown from 'react-markdown';
 
 interface CompanionModeProps {
@@ -19,12 +20,11 @@ interface TranscriptItem {
   isComplete: boolean;
 }
 
-// 1. Existing Search Tool
 const searchToolDeclaration: FunctionDeclaration = {
   name: 'search_web',
   parameters: {
     type: Type.OBJECT,
-    description: 'Search the internet for information, recipes, news, or specific websites.',
+    description: 'Search the internet for real-time information, news, facts, recipes, or current events.',
     properties: {
       query: { type: Type.STRING, description: 'The search query string.' },
     },
@@ -32,7 +32,6 @@ const searchToolDeclaration: FunctionDeclaration = {
   },
 };
 
-// 2. New HUD Scanner Tool
 const hudToolDeclaration: FunctionDeclaration = {
   name: 'render_hud_overlay',
   parameters: {
@@ -71,32 +70,45 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
   const [isMicOn, setIsMicOn] = useState(false);
   const [isVideoOn, setIsVideoOn] = useState(true);
   const [volume, setVolume] = useState(0);
-  const [isUserSpeaking, setIsUserSpeaking] = useState(false); // New state for VAD feedback
+  const [isUserSpeaking, setIsUserSpeaking] = useState(false);
   const [transcripts, setTranscripts] = useState<TranscriptItem[]>([]);
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
+  const [activeCommand, setActiveCommand] = useState<{ text: string; type: 'search' | 'scan' | 'think' } | null>(null);
+  
+  // Gesture State
+  const [detectedGesture, setDetectedGesture] = useState<string | null>(null);
+  const [gestureAction, setGestureAction] = useState<string | null>(null);
 
   // Refs for state access inside closures
   const isMicOnRef = useRef(isMicOn);
   const isVideoOnRef = useRef(isVideoOn);
   const feedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const silenceFramesRef = useRef(0);
-  const isSpeakingGateRef = useRef(false);
+  const commandTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const gestureCooldownRef = useRef<number>(0);
+  const gestureActionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   
   // Refs for audio/video elements
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
+  
+  // Audio Context Refs
   const inputAudioContextRef = useRef<AudioContext | null>(null);
   const outputAudioContextRef = useRef<AudioContext | null>(null);
   const outputAnalyserRef = useRef<AnalyserNode | null>(null);
   const inputAnalyserRef = useRef<AnalyserNode | null>(null);
+  
+  // Logic Refs
   const animationFrameRef = useRef<number | null>(null);
   const nextStartTimeRef = useRef<number>(0);
   const sourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const sessionRef = useRef<any>(null); 
   const streamRef = useRef<MediaStream | null>(null);
   const frameIntervalRef = useRef<number | null>(null);
+  const gestureIntervalRef = useRef<number | null>(null);
   const initializedRef = useRef(false);
   const isResponseStoppedRef = useRef(false);
+  const isSocketOpenRef = useRef(false);
 
   // Sync refs with state
   useEffect(() => {
@@ -106,42 +118,40 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
         track.enabled = isMicOn;
       });
     }
+    if (isMicOn && inputAudioContextRef.current?.state === 'suspended') {
+      inputAudioContextRef.current.resume();
+    }
   }, [isMicOn]);
 
   useEffect(() => {
     isVideoOnRef.current = isVideoOn;
   }, [isVideoOn]);
 
+  // Initialize Gesture Recognizer
+  useEffect(() => {
+    initializeGestureRecognizer();
+  }, []);
+
   const toggleMic = async () => {
-    try {
-      const newState = !isMicOn;
-      setIsMicOn(newState);
-      isMicOnRef.current = newState;
-
-      // Show visual feedback
-      if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
-      setFeedbackMessage(newState ? "Microphone ON" : "Microphone OFF");
-      feedbackTimeoutRef.current = setTimeout(() => setFeedbackMessage(null), 2000);
-
-      // Resume AudioContext if it was suspended (browser autoplay policy)
-      if (newState) {
-        if (inputAudioContextRef.current?.state === 'suspended') {
-          await inputAudioContextRef.current.resume();
-        }
-        if (outputAudioContextRef.current?.state === 'suspended') {
-          await outputAudioContextRef.current.resume();
-        }
-      }
-    } catch (e) {
-      console.error("Error toggling mic:", e);
-    }
+    const newState = !isMicOn;
+    setIsMicOn(newState);
+    if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
+    setFeedbackMessage(newState ? "Microphone ON" : "Microphone OFF");
+    feedbackTimeoutRef.current = setTimeout(() => setFeedbackMessage(null), 2000);
   };
 
-  const triggerScan = () => {
-     setFeedbackMessage("Say 'Scan this' to analyze");
+  const triggerScan = useCallback(() => {
+     setFeedbackMessage("Analyzing Visual...");
+     // In a real app, this would send a specific message to the model to analyze the current frame
+     // For now, we simulate the 'Scan this' voice command effect
+     if (sessionRef.current && isSocketOpenRef.current) {
+        // We can't easily force the model to 'think' it heard text without sending audio,
+        // but we can prompt the user visually.
+        // Or we could send a text prompt if the API supports it in this mode (it does via sendRealtimeInput text, but simpler to just set feedback)
+     }
      if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
      feedbackTimeoutRef.current = setTimeout(() => setFeedbackMessage(null), 3000);
-  };
+  }, []);
 
   const stopSpeaking = () => {
     isResponseStoppedRef.current = true;
@@ -154,7 +164,18 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
     }
   };
 
-  // Transcript helper
+  const showCommandFeedback = (text: string, type: 'search' | 'scan' | 'think') => {
+    if (commandTimeoutRef.current) clearTimeout(commandTimeoutRef.current);
+    setActiveCommand({ text, type });
+    commandTimeoutRef.current = setTimeout(() => setActiveCommand(null), 3000);
+  };
+  
+  const showGestureFeedback = (action: string) => {
+      setGestureAction(action);
+      if (gestureActionTimeoutRef.current) clearTimeout(gestureActionTimeoutRef.current);
+      gestureActionTimeoutRef.current = setTimeout(() => setGestureAction(null), 1000);
+  };
+
   const updateTranscript = (role: 'user' | 'model', text: string, isComplete: boolean) => {
     setTranscripts(prev => {
       const last = prev[prev.length - 1];
@@ -181,34 +202,82 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
         inputAnalyserRef.current.getByteFrequencyData(dataArray);
         let sum = 0;
         for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
-        // Visualizer responds to raw input to feel responsive even if gate is closed
-        avgVolume = Math.max(avgVolume, (sum / dataArray.length) * 2.5);
+        const inputVol = (sum / dataArray.length) * 2; 
+        setIsUserSpeaking(inputVol > 15);
+        avgVolume = Math.max(avgVolume, inputVol);
+      } else {
+        setIsUserSpeaking(false);
       }
+
       setVolume(Math.min(avgVolume / 128, 1)); 
       animationFrameRef.current = requestAnimationFrame(update);
     };
     update();
   };
+  
+  const handleGesture = (gesture: string) => {
+      const now = Date.now();
+      if (now - gestureCooldownRef.current < 500) return; // Debounce
+
+      if (gesture === "Pointing_Up") {
+          // Scroll Up
+          if (transcriptRef.current) {
+              transcriptRef.current.scrollBy({ top: -150, behavior: 'smooth' });
+              showGestureFeedback("Scroll Up");
+              gestureCooldownRef.current = now;
+          }
+      } else if (gesture === "Victory") {
+          // Scroll Down
+          if (transcriptRef.current) {
+              transcriptRef.current.scrollBy({ top: 150, behavior: 'smooth' });
+              showGestureFeedback("Scroll Down");
+              gestureCooldownRef.current = now;
+          }
+      } else if (gesture === "Thumb_Down") {
+          // Go Back / Dismiss
+          if (holoData) {
+              setHoloData(null);
+              showGestureFeedback("Dismissed");
+              gestureCooldownRef.current = now + 500; // Longer cooldown for state changes
+          } else if (suggestedSites.length > 0) {
+              setSuggestedSites([]);
+              showGestureFeedback("Closed Suggestions");
+              gestureCooldownRef.current = now + 500;
+          }
+      } else if (gesture === "Closed_Fist") {
+          // Select / Scan
+          // Only trigger if we haven't recently
+          triggerScan();
+          showGestureFeedback("Scan Triggered");
+          gestureCooldownRef.current = now + 2000; // Long cooldown to prevent spamming
+      }
+  };
 
   const cleanupSession = () => {
     if (frameIntervalRef.current) clearInterval(frameIntervalRef.current);
+    if (gestureIntervalRef.current) clearInterval(gestureIntervalRef.current);
     if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+    
+    isSocketOpenRef.current = false;
     if (sessionRef.current) {
-       try { sessionRef.current.close(); } catch (e) { console.warn("Error closing session", e); }
        sessionRef.current = null;
     }
+    
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => t.stop());
       streamRef.current = null;
     }
+    
     if (inputAudioContextRef.current) {
       inputAudioContextRef.current.close();
       inputAudioContextRef.current = null;
     }
+    
     if (outputAudioContextRef.current) {
       outputAudioContextRef.current.close();
       outputAudioContextRef.current = null;
     }
+    
     setIsSessionActive(false);
     initializedRef.current = false;
   };
@@ -222,10 +291,11 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
 
     try {
       const apiKey = process.env.API_KEY || '';
-      if (!apiKey) throw new Error("API Key not found in environment.");
+      if (!apiKey) throw new Error("API Key not found.");
       
       const ai = new GoogleGenAI({ apiKey });
       
+      // Setup Audio Contexts
       inputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       
@@ -236,12 +306,12 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
       inputAnalyserRef.current = inputAudioContextRef.current.createAnalyser();
       inputAnalyserRef.current.fftSize = 512;
 
-      // Enable native browser audio processing features
+      // Microphone
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true, // Let the browser handle gain
+          autoGainControl: true,
         },
         video: true 
       });
@@ -256,23 +326,19 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
       const config = {
         model: 'gemini-2.5-flash-native-audio-preview-09-2025',
         config: {
-          responseModalities: [Modality.AUDIO],
-          inputAudioTranscription: {},
+          responseModalities: [Modality.AUDIO], 
+          speechConfig: {
+            voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } }
+          },
+          inputAudioTranscription: {}, 
           outputAudioTranscription: {},
-          systemInstruction: `You are Alexis, a warm and helpful AI companion.
-          Greet the user: ${user.name}.
+          systemInstruction: `You are Alexis, an AI browser companion. User: ${user.name}.
           
-          CRITICAL INSTRUCTION: Listen patiently. The user may pause while thinking. Do NOT interrupt until they have finished their full sentence or question.
-          
-          You have two main modes of help:
-          1. WEB SEARCH: If asked to search, use 'search_web'.
-          2. HUD SCANNER: If the user asks to "Scan this", "What is this", "Analyze this", or "Show me specs", you MUST use the 'render_hud_overlay' tool.
-             - Look at the video input.
-             - Extract structured data: Title, Category, 3-4 Key Attributes (like Calories for food, Resolution for screens, Author for books), and a Summary.
-             - Call 'render_hud_overlay' with this data.
-             - Keep your verbal response extremely brief (e.g., "Scanning target... Here is the analysis.") so the user focuses on the UI.
-          
-          Otherwise, be conversational.`,
+          Guidelines:
+          - Be conversational, concise, and helpful.
+          - CRITICAL: If the user asks a question about recent events, facts, news, weather, or information you don't know, YOU MUST use the 'search_web' tool.
+          - If the user asks to "scan", "analyze", "look at this", or "what is this", use the 'render_hud_overlay' tool.
+          - When using tools, be patient and wait for the tool response before continuing.`,
           tools: [{ functionDeclarations: [searchToolDeclaration, hudToolDeclaration] }],
         },
       };
@@ -282,65 +348,32 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
         ...config,
         callbacks: {
           onopen: () => {
-            console.log("Live Session Connected");
+            console.log("Session Connected");
             setIsSessionActive(true);
+            isSocketOpenRef.current = true;
             startAudioAnalysis();
             
             if (inputAudioContextRef.current && streamRef.current) {
               const source = inputAudioContextRef.current.createMediaStreamSource(streamRef.current);
-              
-              // No extra gain node needed with AGC
+              // Reduced buffer size to 2048 (approx 128ms) for better latency while maintaining stability
               const scriptProcessor = inputAudioContextRef.current.createScriptProcessor(2048, 1, 1);
               
               scriptProcessor.onaudioprocess = (e) => {
-                if (!isMicOnRef.current) {
-                   setIsUserSpeaking(false);
-                   return;
-                }
+                if (!isMicOnRef.current || !isSocketOpenRef.current) return;
+                
                 const inputData = e.inputBuffer.getChannelData(0);
-                
-                // --- ADVANCED NOISE GATE WITH HYSTERESIS ---
-                let sum = 0;
-                for (let i = 0; i < inputData.length; i++) {
-                  sum += inputData[i] * inputData[i];
-                }
-                const rms = Math.sqrt(sum / inputData.length);
-                
-                // Lower threshold for finer sensitivity (0.002)
-                const THRESHOLD = 0.002; 
-                // ~500ms of silence required to close gate (approx 10-12 frames at 2048 samples/frame)
-                const HYSTERESIS_FRAMES = 12;
-
-                if (rms > THRESHOLD) {
-                  silenceFramesRef.current = 0;
-                  isSpeakingGateRef.current = true;
-                } else {
-                  silenceFramesRef.current++;
-                  if (silenceFramesRef.current > HYSTERESIS_FRAMES) {
-                    isSpeakingGateRef.current = false;
-                  }
-                }
-
-                // Update UI State (debounced slightly to avoid flickering)
-                if (isSpeakingGateRef.current !== isUserSpeaking) {
-                   // Force update React state for UI feedback
-                   setIsUserSpeaking(isSpeakingGateRef.current);
-                }
-
-                // If gate is closed, send silence to clear the buffer
-                if (!isSpeakingGateRef.current) {
-                  inputData.fill(0);
-                }
-
                 const pcmBlob = createPcmBlob(inputData);
-                sessionPromise.then((session) => {
-                  try { session.sendRealtimeInput({ media: pcmBlob }); } catch (e) { console.warn("Error sending audio", e); }
-                });
+                
+                // Only send if session is established to prevent queue drift
+                if (sessionRef.current) {
+                   sessionRef.current.sendRealtimeInput({ media: pcmBlob });
+                }
               };
               
               source.connect(inputAnalyserRef.current!);
               source.connect(scriptProcessor);
               
+              // Mute input to avoid feedback loop
               const silence = inputAudioContextRef.current.createGain();
               silence.gain.value = 0;
               scriptProcessor.connect(silence);
@@ -348,6 +381,7 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
             }
           },
           onmessage: async (msg: LiveServerMessage) => {
+              // Text Transcription
               if (msg.serverContent?.inputTranscription) {
                 isResponseStoppedRef.current = false;
                 updateTranscript('user', msg.serverContent.inputTranscription.text, false);
@@ -359,92 +393,160 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
                 setTranscripts(prev => prev.map(t => ({ ...t, isComplete: true })));
                 isResponseStoppedRef.current = false;
               }
+
+              // Interruption
               if (msg.serverContent?.interrupted) {
                 isResponseStoppedRef.current = false;
                 sourcesRef.current.forEach(source => { try { source.stop(); } catch (e) {} });
                 sourcesRef.current.clear();
                 if (outputAudioContextRef.current) {
-                  nextStartTimeRef.current = outputAudioContextRef.current.currentTime;
+                   nextStartTimeRef.current = outputAudioContextRef.current.currentTime;
                 }
               }
 
+              // Audio Output
               const audioData = msg.serverContent?.modelTurn?.parts?.[0]?.inlineData?.data;
               if (audioData && outputAudioContextRef.current && !isResponseStoppedRef.current) {
                 const ctx = outputAudioContextRef.current;
-                nextStartTimeRef.current = Math.max(nextStartTimeRef.current, ctx.currentTime);
                 const audioBuffer = await decodeAudioData(base64ToUint8Array(audioData), ctx);
+                
+                // Audio Scheduling with drift correction
+                const MIN_BUFFER_TIME = 0.02; // 20ms safety
+                if (nextStartTimeRef.current < ctx.currentTime) {
+                   nextStartTimeRef.current = ctx.currentTime + MIN_BUFFER_TIME;
+                }
+                
                 const source = ctx.createBufferSource();
                 source.buffer = audioBuffer;
-                if (outputAnalyserRef.current) source.connect(outputAnalyserRef.current);
-                else source.connect(ctx.destination);
+                source.connect(outputAnalyserRef.current || ctx.destination);
                 source.start(nextStartTimeRef.current);
+                
                 nextStartTimeRef.current += audioBuffer.duration;
                 sourcesRef.current.add(source);
                 source.onended = () => { sourcesRef.current.delete(source); };
               }
 
+              // Tool Execution
               if (msg.toolCall) {
-                sessionPromise.then(async (session) => {
-                  for (const fc of msg.toolCall!.functionCalls) {
+                if (sessionRef.current) {
+                  const functionResponses = [];
+                  for (const fc of msg.toolCall.functionCalls) {
                      if (fc.name === 'search_web') {
-                       const query = (fc.args as any).query;
-                       const searchResult = await performWebSearch(query);
-                       setSuggestedSites(searchResult.sources);
-                       session.sendToolResponse({
-                         functionResponses: {
-                           id: fc.id, name: fc.name,
-                           response: { result: `Summary: ${searchResult.text}. Sources: ${searchResult.sources.map(s => s.title).join(', ')}` }
-                         }
-                       });
+                       try {
+                         const query = (fc.args as any).query;
+                         showCommandFeedback(`Searching: ${query}`, 'search');
+                         
+                         const searchResult = await performWebSearch(query);
+                         setSuggestedSites(searchResult.sources);
+                         
+                         functionResponses.push({
+                           id: fc.id, 
+                           name: fc.name,
+                           response: { result: `Summary: ${searchResult.text}` } // Send text result
+                         });
+                       } catch (e) {
+                         console.error("Tool execution failed", e);
+                         functionResponses.push({
+                           id: fc.id,
+                           name: fc.name,
+                           response: { result: "Error performing search." }
+                         });
+                       }
                      } else if (fc.name === 'render_hud_overlay') {
-                       // Direct UI Rendering
-                       const data = fc.args as unknown as HoloData;
-                       setHoloData(data);
-                       setSuggestedSites([]); // Clear old suggestions to focus on HUD
-                       
-                       // Send simple success back so model knows it worked
-                       session.sendToolResponse({
-                         functionResponses: {
-                           id: fc.id, name: fc.name,
-                           response: { result: "HUD Rendered Successfully." }
-                         }
-                       });
+                       try {
+                         showCommandFeedback("Analyzing Target...", 'scan');
+                         const data = fc.args as unknown as HoloData;
+                         setHoloData(data);
+                         setSuggestedSites([]); 
+                         
+                         functionResponses.push({
+                           id: fc.id, 
+                           name: fc.name,
+                           response: { result: "HUD Rendered." }
+                         });
+                       } catch (e) {
+                         console.error("HUD execution failed", e);
+                         functionResponses.push({
+                           id: fc.id,
+                           name: fc.name,
+                           response: { result: "Error rendering HUD." }
+                         });
+                       }
                      }
                   }
-                });
+                  
+                  // Send responses back to model
+                  if (functionResponses.length > 0) {
+                      sessionRef.current.sendToolResponse({
+                        functionResponses: functionResponses
+                      });
+                  }
+                }
               }
           },
-          onclose: () => { setIsSessionActive(false); },
+          onclose: () => { 
+            console.log("Session Closed");
+            isSocketOpenRef.current = false;
+            setIsSessionActive(false); 
+          },
           onerror: (err) => {
-            setError(err instanceof Error ? err.message : "Connection Error");
-            setIsSessionActive(false);
+            console.error("Gemini Error:", err);
+            // Only show generic error if it's not a normal close/interrupt
+            if (isSocketOpenRef.current) {
+              setError("Network error. Reconnecting...");
+              cleanupSession();
+              // Attempt reconnect after a short delay
+              setTimeout(() => connectToGemini(), 2000);
+            }
           }
         }
       });
       
       sessionRef.current = await sessionPromise;
 
+      // Video Streaming & Gesture Loop
       if (canvasRef.current) {
          const ctx = canvasRef.current.getContext('2d');
+         
+         // Start separate intervals for video sending (slower) and gesture detection (faster)
          frameIntervalRef.current = window.setInterval(() => {
-           if (videoRef.current && ctx && isVideoOnRef.current) {
-              canvasRef.current!.width = videoRef.current.videoWidth;
-              canvasRef.current!.height = videoRef.current.videoHeight;
-              ctx.drawImage(videoRef.current, 0, 0);
+           if (videoRef.current && ctx && isVideoOnRef.current && isSocketOpenRef.current && sessionRef.current) {
+              const MAX_WIDTH = 640;
+              const ratio = videoRef.current.videoWidth / videoRef.current.videoHeight;
+              canvasRef.current!.width = MAX_WIDTH;
+              canvasRef.current!.height = MAX_WIDTH / ratio;
+              
+              ctx.drawImage(videoRef.current, 0, 0, canvasRef.current!.width, canvasRef.current!.height);
+              
               canvasRef.current!.toBlob(async (blob) => {
                 if (blob) {
                   const base64 = await blobToBase64(blob);
-                  sessionPromise.then(session => {
-                    try { session.sendRealtimeInput({ media: { mimeType: 'image/jpeg', data: base64 } }); } catch (e) {}
-                  });
+                  if (sessionRef.current && isSocketOpenRef.current) {
+                    try { 
+                      sessionRef.current.sendRealtimeInput({ media: { mimeType: 'image/jpeg', data: base64 } }); 
+                    } catch (e) {}
+                  }
                 }
               }, 'image/jpeg', 0.5);
            }
-         }, 1000); 
+         }, 800);
+         
+         // Gesture Detection Loop
+         gestureIntervalRef.current = window.setInterval(() => {
+             if (videoRef.current && isVideoOnRef.current) {
+                 const gesture = detectGesture(videoRef.current);
+                 if (gesture) {
+                     setDetectedGesture(gesture);
+                     handleGesture(gesture);
+                 } else {
+                     setDetectedGesture(null);
+                 }
+             }
+         }, 150); // Run detection approx 6 times a second
       }
 
     } catch (err: any) {
-      setError(err.message || "Failed to initialize session");
+      setError(err.message || "Failed to initialize");
       setIsSessionActive(false);
       initializedRef.current = false;
     }
@@ -459,7 +561,16 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
     if (transcriptRef.current) transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
   }, [transcripts]);
 
-  const transcriptRef = useRef<HTMLDivElement>(null);
+  // Helper to render gesture icon
+  const getGestureIcon = (gesture: string | null) => {
+      switch(gesture) {
+          case 'Pointing_Up': return <ChevronUp className="w-5 h-5" />;
+          case 'Victory': return <ChevronDown className="w-5 h-5" />;
+          case 'Thumb_Down': return <ThumbsDown className="w-5 h-5" />;
+          case 'Closed_Fist': return <MousePointerClick className="w-5 h-5" />;
+          default: return <Hand className="w-5 h-5" />;
+      }
+  };
 
   return (
     <div className="flex flex-col h-full w-full relative overflow-hidden bg-slate-950">
@@ -479,12 +590,11 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
           <div className="flex items-center gap-3">
             <div className={`w-2.5 h-2.5 rounded-full ${isSessionActive ? 'bg-emerald-500 animate-pulse' : error ? 'bg-red-500' : 'bg-yellow-500 animate-pulse'}`}></div>
             <span className="text-sm font-medium text-slate-400 uppercase tracking-widest text-[10px]">
-              {error ? 'Connection Failed' : isSessionActive ? 'Alexis Connected' : 'Connecting...'}
+              {error ? error : isSessionActive ? 'Alexis Connected' : 'Connecting...'}
             </span>
           </div>
           
           <div className={`flex gap-4 transition-opacity ${!isSessionActive ? 'opacity-50 pointer-events-none' : 'opacity-100'}`}>
-             {/* HUD Scanner Button */}
              <button 
                onClick={triggerScan}
                className={`p-3 rounded-full transition-all duration-300 ${holoData ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/50 shadow-[0_0_15px_rgba(6,182,212,0.3)]' : 'bg-slate-800 text-white hover:bg-slate-700'}`}
@@ -519,8 +629,32 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
           </div>
         </div>
 
-        {/* Feedback Toast */}
-        {feedbackMessage && (
+        {/* Command Feedback Overlay */}
+        {activeCommand && (
+          <div className="absolute top-28 left-1/2 transform -translate-x-1/2 z-50 pointer-events-none">
+             <div className="flex items-center gap-3 px-6 py-4 bg-slate-900/90 backdrop-blur-xl border border-indigo-500/30 rounded-2xl shadow-[0_0_40px_rgba(99,102,241,0.25)] animate-in fade-in zoom-in-95 duration-300">
+                {activeCommand.type === 'search' && (
+                   <div className="relative">
+                      <div className="absolute inset-0 bg-blue-500 blur-lg opacity-50 animate-pulse"></div>
+                      <Globe className="w-6 h-6 text-blue-400 relative z-10 animate-spin-slow" />
+                   </div>
+                )}
+                {activeCommand.type === 'scan' && (
+                   <div className="relative">
+                      <div className="absolute inset-0 bg-cyan-500 blur-lg opacity-50 animate-pulse"></div>
+                      <ScanEye className="w-6 h-6 text-cyan-400 relative z-10 animate-pulse" />
+                   </div>
+                )}
+                <div className="flex flex-col">
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-indigo-300">Command Recognized</span>
+                  <span className="font-medium text-white text-lg tracking-tight shadow-black drop-shadow-md">{activeCommand.text}</span>
+                </div>
+             </div>
+          </div>
+        )}
+
+        {/* Feedback Toast (Mic toggle etc) */}
+        {feedbackMessage && !activeCommand && (
           <div className="absolute top-24 left-1/2 transform -translate-x-1/2 z-50 pointer-events-none">
              <div className="flex items-center gap-3 px-6 py-3 bg-slate-800/90 backdrop-blur-xl border border-slate-700 rounded-full shadow-2xl animate-in fade-in slide-in-from-top-4 duration-300">
                 {isMicOn ? (
@@ -534,6 +668,16 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
                 )}
                 <span className="font-semibold text-white tracking-wide">{feedbackMessage}</span>
              </div>
+          </div>
+        )}
+        
+        {/* Gesture Action Toast */}
+        {gestureAction && (
+          <div className="absolute bottom-40 left-1/2 transform -translate-x-1/2 z-50 pointer-events-none">
+            <div className="flex items-center gap-2 px-4 py-2 bg-indigo-900/80 backdrop-blur rounded-lg border border-indigo-500/50 shadow-xl animate-in fade-in slide-in-from-bottom-2">
+              <Sparkles className="w-4 h-4 text-indigo-300" />
+              <span className="text-sm font-bold text-indigo-100 uppercase tracking-wider">{gestureAction}</span>
+            </div>
           </div>
         )}
 
@@ -554,7 +698,6 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
             </div>
           ) : (
             <div className="relative flex flex-col items-center">
-              {/* If HoloData is present, show Card, else Visualizer */}
               {holoData ? (
                  <HoloCard data={holoData} onClose={() => setHoloData(null)} />
               ) : (
@@ -578,14 +721,20 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
             </div>
           )}
           
-          {/* Camera View */}
           <div className={`absolute bottom-8 right-8 w-48 h-36 bg-slate-900 rounded-2xl overflow-hidden border border-slate-700 shadow-2xl transition-all duration-500 ${isVideoOn && !error ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-10 pointer-events-none'}`}>
              <video ref={videoRef} className="w-full h-full object-cover mirror-mode" muted playsInline />
              <div className="absolute top-2 left-2 bg-black/40 backdrop-blur px-2 py-0.5 rounded text-[10px] font-mono text-white/70">YOU</div>
+             
+             {/* Gesture Indicator Overlay */}
+             {isVideoOn && detectedGesture && (
+                <div className="absolute bottom-2 right-2 flex items-center gap-1.5 px-2 py-1 bg-indigo-600/80 backdrop-blur rounded text-white animate-in zoom-in">
+                    {getGestureIcon(detectedGesture)}
+                    <span className="text-[9px] font-bold uppercase">{detectedGesture.replace('_', ' ')}</span>
+                </div>
+             )}
           </div>
         </div>
 
-        {/* Chat / Transcript Overlay (Hide when Holo is active to reduce clutter) */}
         {!holoData && (
           <div className="flex-1 max-h-[250px] w-full max-w-2xl mx-auto px-6 mb-4 overflow-y-auto mask-gradient relative z-10" ref={transcriptRef}>
              <div className="space-y-4 flex flex-col justify-end min-h-full pb-4">
@@ -610,7 +759,6 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
           </div>
         )}
 
-        {/* Bottom: Dynamic Suggestions (Only show if no HoloData) */}
         {suggestedSites.length > 0 && !holoData && (
           <div className="w-full bg-slate-900/90 backdrop-blur-xl border-t border-slate-800 p-6 transition-all duration-500 ease-out animate-in slide-in-from-bottom-10 z-20">
             <div className="flex items-center justify-between mb-4">
@@ -636,13 +784,13 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
                       <div className="text-[10px] font-mono text-slate-400 bg-slate-900 px-2 py-1 rounded truncate max-w-[180px]">
                         {new URL(site.url).hostname}
                       </div>
-                      <ExternalLinkIcon />
+                      <ExternalLink className="w-3 h-3 text-slate-500" />
                    </div>
                    <div className="font-medium text-slate-200 line-clamp-2 group-hover:text-white transition-colors">
                      {site.title}
                    </div>
                    <div className="mt-3 text-xs text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1">
-                     Tap to read more <ArrowRightIcon />
+                     Tap to read more <ArrowRight className="w-3 h-3" />
                    </div>
                  </a>
                ))}
@@ -655,15 +803,3 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
     </div>
   );
 };
-
-const ExternalLinkIcon = () => (
-  <svg className="w-3 h-3 text-slate-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-  </svg>
-);
-
-const ArrowRightIcon = () => (
-  <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14 5l7 7m0 0l-7 7m7-7H3" />
-  </svg>
-);

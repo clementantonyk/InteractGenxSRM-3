@@ -1,14 +1,19 @@
 import { GoogleGenAI } from "@google/genai";
 import { SearchResult } from "../types";
 
-const apiKey = process.env.API_KEY || '';
-const ai = new GoogleGenAI({ apiKey });
-
 export const performWebSearch = async (query: string): Promise<{ text: string; sources: SearchResult[] }> => {
   try {
+    const apiKey = process.env.API_KEY || '';
+    if (!apiKey) {
+        console.error("API Key missing for web search");
+        return { text: "I cannot search without an API key.", sources: [] };
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
+
     const response = await ai.models.generateContent({
       model: "gemini-2.5-flash",
-      contents: `Search the web for: ${query}. Provide a comprehensive summary and list the sources.`,
+      contents: `Search the web for: ${query}. Provide a comprehensive summary (max 3 sentences) and list the sources.`,
       config: {
         tools: [{ googleSearch: {} }],
       },
