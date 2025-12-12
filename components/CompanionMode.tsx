@@ -3,7 +3,7 @@ import { UserProfile, SearchResult } from '../types';
 import { GoogleGenAI, LiveServerMessage, Modality, FunctionDeclaration, Type } from '@google/genai';
 import { Visualizer } from './Visualizer';
 import { HoloCard, HoloData } from './HoloCard';
-import { Mic, MicOff, Video, VideoOff, LayoutGrid, X, RotateCcw, AlertCircle, Square, ScanEye } from 'lucide-react';
+import { Mic, MicOff, Video, VideoOff, LayoutGrid, X, RotateCcw, AlertCircle, Square, ScanEye, Radio } from 'lucide-react';
 import { createPcmBlob, decodeAudioData, blobToBase64, base64ToUint8Array } from '../utils/audio-utils';
 import { performWebSearch } from '../services/gemini';
 import ReactMarkdown from 'react-markdown';
@@ -71,6 +71,7 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
   const [isMicOn, setIsMicOn] = useState(false);
   const [isVideoOn, setIsVideoOn] = useState(true);
   const [volume, setVolume] = useState(0);
+  const [isUserSpeaking, setIsUserSpeaking] = useState(false); // New state for VAD feedback
   const [transcripts, setTranscripts] = useState<TranscriptItem[]>([]);
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
 
@@ -78,6 +79,8 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
   const isMicOnRef = useRef(isMicOn);
   const isVideoOnRef = useRef(isVideoOn);
   const feedbackTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const silenceFramesRef = useRef(0);
+  const isSpeakingGateRef = useRef(false);
   
   // Refs for audio/video elements
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -178,6 +181,7 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
         inputAnalyserRef.current.getByteFrequencyData(dataArray);
         let sum = 0;
         for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+        // Visualizer responds to raw input to feel responsive even if gate is closed
         avgVolume = Math.max(avgVolume, (sum / dataArray.length) * 2.5);
       }
       setVolume(Math.min(avgVolume / 128, 1)); 
@@ -237,7 +241,7 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
         audio: {
           echoCancellation: true,
           noiseSuppression: true,
-          autoGainControl: true,
+          autoGainControl: true, // Let the browser handle gain
         },
         video: true 
       });
@@ -285,27 +289,46 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
             if (inputAudioContextRef.current && streamRef.current) {
               const source = inputAudioContextRef.current.createMediaStreamSource(streamRef.current);
               
-              // Mild Gain Boost (AGC handles most of it, but this ensures quiet speech is picked up)
-              const gainNode = inputAudioContextRef.current.createGain();
-              gainNode.gain.value = 1.1; 
-              
+              // No extra gain node needed with AGC
               const scriptProcessor = inputAudioContextRef.current.createScriptProcessor(2048, 1, 1);
               
               scriptProcessor.onaudioprocess = (e) => {
-                if (!isMicOnRef.current) return;
+                if (!isMicOnRef.current) {
+                   setIsUserSpeaking(false);
+                   return;
+                }
                 const inputData = e.inputBuffer.getChannelData(0);
                 
-                // NOISE GATE Implementation
-                // Calculate RMS (Root Mean Square) to detect volume level
+                // --- ADVANCED NOISE GATE WITH HYSTERESIS ---
                 let sum = 0;
                 for (let i = 0; i < inputData.length; i++) {
                   sum += inputData[i] * inputData[i];
                 }
                 const rms = Math.sqrt(sum / inputData.length);
                 
-                // If the audio is too quiet (background noise), mute it.
-                // 0.01 is a reasonable threshold for silence/hiss.
-                if (rms < 0.01) {
+                // Lower threshold for finer sensitivity (0.002)
+                const THRESHOLD = 0.002; 
+                // ~500ms of silence required to close gate (approx 10-12 frames at 2048 samples/frame)
+                const HYSTERESIS_FRAMES = 12;
+
+                if (rms > THRESHOLD) {
+                  silenceFramesRef.current = 0;
+                  isSpeakingGateRef.current = true;
+                } else {
+                  silenceFramesRef.current++;
+                  if (silenceFramesRef.current > HYSTERESIS_FRAMES) {
+                    isSpeakingGateRef.current = false;
+                  }
+                }
+
+                // Update UI State (debounced slightly to avoid flickering)
+                if (isSpeakingGateRef.current !== isUserSpeaking) {
+                   // Force update React state for UI feedback
+                   setIsUserSpeaking(isSpeakingGateRef.current);
+                }
+
+                // If gate is closed, send silence to clear the buffer
+                if (!isSpeakingGateRef.current) {
                   inputData.fill(0);
                 }
 
@@ -315,9 +338,8 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
                 });
               };
               
-              source.connect(gainNode);
-              gainNode.connect(inputAnalyserRef.current!);
-              gainNode.connect(scriptProcessor);
+              source.connect(inputAnalyserRef.current!);
+              source.connect(scriptProcessor);
               
               const silence = inputAudioContextRef.current.createGain();
               silence.gain.value = 0;
@@ -536,7 +558,16 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
               {holoData ? (
                  <HoloCard data={holoData} onClose={() => setHoloData(null)} />
               ) : (
-                 <Visualizer isActive={isSessionActive} volume={volume} />
+                 <div className="relative">
+                   {/* VAD Indicator */}
+                   {isMicOn && (
+                     <div className={`absolute -top-8 left-1/2 -translate-x-1/2 flex items-center gap-2 transition-all duration-300 ${isUserSpeaking ? 'opacity-100 transform translate-y-0' : 'opacity-0 transform translate-y-2'}`}>
+                       <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
+                       <span className="text-[10px] uppercase font-bold tracking-widest text-emerald-400">Voice Detected</span>
+                     </div>
+                   )}
+                   <Visualizer isActive={isSessionActive} volume={volume} />
+                 </div>
               )}
             </div>
           )}
