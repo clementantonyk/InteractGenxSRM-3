@@ -1,0 +1,8 @@
+{
+  "name": "Alexis - Next Gen Browser",
+  "description": "A dual-mode browsing experience featuring a traditional web search and an immersive, multimodal AI companion named Alexis.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ]
+}
