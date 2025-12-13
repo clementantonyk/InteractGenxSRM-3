@@ -72,7 +72,11 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
   const [isVideoOn, setIsVideoOn] = useState(true);
   const [volume, setVolume] = useState(0);
   const [isUserSpeaking, setIsUserSpeaking] = useState(false);
+  
+  // Transcript & Live Text
   const [transcripts, setTranscripts] = useState<TranscriptItem[]>([]);
+  const [liveInputText, setLiveInputText] = useState(''); // Realtime user speech
+  
   const [feedbackMessage, setFeedbackMessage] = useState<string | null>(null);
   const [activeCommand, setActiveCommand] = useState<{ text: string; type: 'search' | 'scan' | 'think' } | null>(null);
   
@@ -160,10 +164,7 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
 
   const showCommandFeedback = useCallback((text: string, type: 'search' | 'scan' | 'think') => {
     if (commandTimeoutRef.current) clearTimeout(commandTimeoutRef.current);
-    
-    // Play sound cue
     playAudioCue();
-
     setActiveCommand({ text, type });
     commandTimeoutRef.current = setTimeout(() => setActiveCommand(null), 3000);
   }, [playAudioCue]);
@@ -174,6 +175,11 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
     if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
     setFeedbackMessage(newState ? "Microphone ON" : "Microphone OFF");
     feedbackTimeoutRef.current = setTimeout(() => setFeedbackMessage(null), 2000);
+    
+    // Resume context if user toggles mic, just in case
+    if (newState && inputAudioContextRef.current?.state === 'suspended') {
+        inputAudioContextRef.current.resume();
+    }
   };
 
   const stopSpeaking = () => {
@@ -185,10 +191,8 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
     if (outputAudioContextRef.current) {
       nextStartTimeRef.current = outputAudioContextRef.current.currentTime;
     }
-    
-    if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
     setFeedbackMessage("Playback Stopped");
-    feedbackTimeoutRef.current = setTimeout(() => setFeedbackMessage(null), 2000);
+    setTimeout(() => setFeedbackMessage(null), 2000);
   };
 
   const triggerScan = useCallback(() => {
@@ -236,7 +240,7 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
         let sum = 0;
         for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
         const inputVol = (sum / dataArray.length) * 2; 
-        setIsUserSpeaking(inputVol > 15);
+        setIsUserSpeaking(inputVol > 25);
         avgVolume = Math.max(avgVolume, inputVol);
       } else {
         setIsUserSpeaking(false);
@@ -253,36 +257,31 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
       if (now - gestureCooldownRef.current < 500) return; // Debounce
 
       if (gesture === "Pointing_Up") {
-          // Scroll Up
           if (transcriptRef.current) {
               transcriptRef.current.scrollBy({ top: -150, behavior: 'smooth' });
               showGestureFeedback("Scroll Up");
               gestureCooldownRef.current = now;
           }
       } else if (gesture === "Victory") {
-          // Scroll Down
           if (transcriptRef.current) {
               transcriptRef.current.scrollBy({ top: 150, behavior: 'smooth' });
               showGestureFeedback("Scroll Down");
               gestureCooldownRef.current = now;
           }
       } else if (gesture === "Thumb_Down") {
-          // Go Back / Dismiss
           if (holoData) {
               setHoloData(null);
               showGestureFeedback("Dismissed");
-              gestureCooldownRef.current = now + 500; // Longer cooldown for state changes
+              gestureCooldownRef.current = now + 500;
           } else if (suggestedSites.length > 0) {
               setSuggestedSites([]);
               showGestureFeedback("Closed Suggestions");
               gestureCooldownRef.current = now + 500;
           }
       } else if (gesture === "Closed_Fist") {
-          // Select / Scan
-          // Only trigger if we haven't recently
           triggerScan();
           showGestureFeedback("Scan Triggered");
-          gestureCooldownRef.current = now + 2000; // Long cooldown to prevent spamming
+          gestureCooldownRef.current = now + 2000;
       }
   };
 
@@ -329,10 +328,14 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
       const ai = new GoogleGenAI({ apiKey });
       
       // Setup Audio Contexts
-      // Try to use 16000 first, but accept whatever the browser gives to avoid resampling issues at this stage
       inputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       
+      // CRITICAL: Resume output context immediately to allow autoplay of greeting
+      if (outputAudioContextRef.current.state === 'suspended') {
+          await outputAudioContextRef.current.resume();
+      }
+
       outputAnalyserRef.current = outputAudioContextRef.current.createAnalyser();
       outputAnalyserRef.current.fftSize = 512;
       outputAnalyserRef.current.connect(outputAudioContextRef.current.destination);
@@ -346,9 +349,11 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
+          channelCount: 1,
+          sampleRate: 16000,
         },
         video: {
-           width: { ideal: 320 }, // Request lower resolution
+           width: { ideal: 320 }, 
            height: { ideal: 240 }
         }
       });
@@ -368,24 +373,19 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } }
           },
           outputAudioTranscription: {},
-          inputAudioTranscription: {}, // Enabled to show user captions
+          inputAudioTranscription: {}, 
           systemInstruction: `You are Alexis, an AI browser companion. User: ${user.name}.
           
           Role & Persona:
           - You are a high-performance technical assistant and browser co-pilot.
-          - You are highly proficient in software terminology, scientific concepts, and modern web slang.
-          - You have deep knowledge of technical jargon (e.g., React, Kubernetes, LLMs, Neural Networks, Blockchain, GPUs).
+          - You have deep knowledge of technical jargon.
           
-          Voice Recognition Context:
-          - The user is likely to use technical jargon. Bias your listening towards valid technical terms (e.g., "GUI" vs "gooey", "SQL" vs "sequel", "DOM" vs "dom", "JSON" vs "Jason").
-          - If a sentence seems incomplete, wait for context, but prioritize speed in understanding.
-
           Interaction Guidelines:
           - SPEAK AND LISTEN IN ENGLISH ONLY.
-          - Be conversational but concise. Avoid long filler phrases; get straight to the answer.
-          - CRITICAL: If the user asks a question about recent events, facts, news, weather, or information you don't know, YOU MUST use the 'search_web' tool.
-          - If the user asks to "scan", "analyze", "look at this", or "what is this", use the 'render_hud_overlay' tool.
-          - When using tools, be patient and wait for the tool response before continuing.`,
+          - IMPORTANT: As soon as the session starts, you MUST verbally greet the user by their name (${user.name}) and enthusiastically ask what they would like to search for or explore today. Do not wait for user input.
+          - Be conversational but concise.
+          - Use 'search_web' for facts/news.
+          - Use 'render_hud_overlay' for visual analysis commands.`,
           tools: [{ functionDeclarations: [searchToolDeclaration, hudToolDeclaration] }],
         },
       };
@@ -399,17 +399,33 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
             setIsSessionActive(true);
             isSocketOpenRef.current = true;
             startAudioAnalysis();
+
+            // Trigger the initial greeting immediately with explicit instruction for audio
+            sessionPromise.then(session => {
+              session.send({ 
+                  clientContent: { 
+                      turns: [{ 
+                          role: 'user', 
+                          parts: [{ text: `Hello Alexis. My name is ${user.name}. Please greet me loudly.` }] 
+                      }], 
+                      turnComplete: true 
+                  } 
+              });
+            });
             
             if (inputAudioContextRef.current && streamRef.current) {
               const source = inputAudioContextRef.current.createMediaStreamSource(streamRef.current);
-              // Increased buffer size to 4096 to reduce main thread CPU load and network packet frequency
+              
+              const highPassFilter = inputAudioContextRef.current.createBiquadFilter();
+              highPassFilter.type = 'highpass';
+              highPassFilter.frequency.value = 150; 
+              
               const scriptProcessor = inputAudioContextRef.current.createScriptProcessor(4096, 1, 1);
               
               scriptProcessor.onaudioprocess = (e) => {
                 if (!isMicOnRef.current || !isSocketOpenRef.current) return;
                 
                 const inputData = e.inputBuffer.getChannelData(0);
-                // Pass the actual sample rate to the blob creator for downsampling
                 const pcmBlob = createPcmBlob(inputData, inputAudioContextRef.current?.sampleRate || 48000);
                 
                 sessionPromise.then(session => {
@@ -423,10 +439,10 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
                 }).catch(err => console.error("Session not ready for audio", err));
               };
               
-              source.connect(inputAnalyserRef.current!);
-              source.connect(scriptProcessor);
+              source.connect(highPassFilter);
+              highPassFilter.connect(inputAnalyserRef.current!);
+              highPassFilter.connect(scriptProcessor);
               
-              // Mute input to avoid feedback loop
               const silence = inputAudioContextRef.current.createGain();
               silence.gain.value = 0;
               scriptProcessor.connect(silence);
@@ -434,27 +450,33 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
             }
           },
           onmessage: async (msg: LiveServerMessage) => {
-              // Text Transcription (Input & Output)
+              // Real-time Input Transcription (User Speech Stream)
+              if (msg.serverContent?.inputTranscription) {
+                const text = msg.serverContent.inputTranscription.text;
+                setLiveInputText(prev => prev + text);
+                updateTranscript('user', text, false);
+              }
+              
+              // Output Transcription (Model Speech Stream)
               if (msg.serverContent?.outputTranscription) {
                 updateTranscript('model', msg.serverContent.outputTranscription.text, false);
-              }
-              if (msg.serverContent?.inputTranscription) {
-                updateTranscript('user', msg.serverContent.inputTranscription.text, false);
               }
 
               if (msg.serverContent?.turnComplete) {
                 setTranscripts(prev => prev.map(t => ({ ...t, isComplete: true })));
-                // Do NOT reset isResponseStoppedRef here, to ensure manual stop persists until next turn
+                // Clear live text once turn is done
+                setLiveInputText('');
               }
 
               // Interruption
               if (msg.serverContent?.interrupted) {
-                isResponseStoppedRef.current = false; // Reset stop flag on interruption (new turn)
+                isResponseStoppedRef.current = false;
                 sourcesRef.current.forEach(source => { try { source.stop(); } catch (e) {} });
                 sourcesRef.current.clear();
                 if (outputAudioContextRef.current) {
                    nextStartTimeRef.current = outputAudioContextRef.current.currentTime;
                 }
+                setLiveInputText('');
               }
 
               // Audio Output
@@ -463,8 +485,7 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
                 const ctx = outputAudioContextRef.current;
                 const audioBuffer = await decodeAudioData(base64ToUint8Array(audioData), ctx);
                 
-                // Audio Scheduling with drift correction
-                const MIN_BUFFER_TIME = 0.02; // 20ms safety
+                const MIN_BUFFER_TIME = 0.02;
                 if (nextStartTimeRef.current < ctx.currentTime) {
                    nextStartTimeRef.current = ctx.currentTime + MIN_BUFFER_TIME;
                 }
@@ -495,7 +516,7 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
                          functionResponses.push({
                            id: fc.id, 
                            name: fc.name,
-                           response: { result: `Summary: ${searchResult.text}` } // Send text result
+                           response: { result: `Summary: ${searchResult.text}` }
                          });
                        } catch (e) {
                          console.error("Tool execution failed", e);
@@ -528,7 +549,6 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
                      }
                   }
                   
-                  // Send responses back to model
                   if (functionResponses.length > 0) {
                       sessionRef.current.sendToolResponse({
                         functionResponses: functionResponses
@@ -544,11 +564,9 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
           },
           onerror: (err) => {
             console.error("Gemini Error:", err);
-            // Only show generic error if it's not a normal close/interrupt
             if (isSocketOpenRef.current) {
               setError("Network error. Reconnecting...");
               cleanupSession();
-              // Attempt reconnect after a short delay
               setTimeout(() => connectToGemini(), 2000);
             }
           }
@@ -561,10 +579,8 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
       if (canvasRef.current) {
          const ctx = canvasRef.current.getContext('2d');
          
-         // Start separate intervals for video sending (slower) and gesture detection (faster)
          frameIntervalRef.current = window.setInterval(() => {
            if (videoRef.current && ctx && isVideoOnRef.current && isSocketOpenRef.current) {
-              // Further reduced resolution for bandwidth optimization (240px width)
               const MAX_WIDTH = 240;
               const ratio = videoRef.current.videoWidth / videoRef.current.videoHeight;
               canvasRef.current!.width = MAX_WIDTH;
@@ -575,7 +591,6 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
               canvasRef.current!.toBlob(async (blob) => {
                 if (blob) {
                   const base64 = await blobToBase64(blob);
-                  // Use sessionPromise for video as well
                   sessionPromise.then(session => {
                       if (isSocketOpenRef.current) {
                         try {
@@ -586,11 +601,10 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
                       }
                   }).catch(e => console.error("Session not ready for video", e));
                 }
-              }, 'image/jpeg', 0.4); // Quality 0.4
+              }, 'image/jpeg', 0.4);
            }
-         }, 1000); // 1 FPS for video
+         }, 1000);
          
-         // Gesture Detection Loop - THROTTLED to 500ms
          gestureIntervalRef.current = window.setInterval(async () => {
              if (videoRef.current && isVideoOnRef.current && !gestureProcessingRef.current) {
                  gestureProcessingRef.current = true;
@@ -603,12 +617,11 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
                          setDetectedGesture(null);
                      }
                  } catch (e) {
-                     // Ignore gesture errors
                  } finally {
                      gestureProcessingRef.current = false;
                  }
              }
-         }, 500); // Throttled to 500ms to allow main thread breathing room
+         }, 500);
       }
 
     } catch (err: any) {
@@ -858,15 +871,26 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
               {holoData ? (
                  <HoloCard data={holoData} onClose={() => setHoloData(null)} />
               ) : (
-                 <div className="relative">
-                   {/* VAD Indicator */}
-                   {isMicOn && (
-                     <div className={`absolute -top-8 left-1/2 -translate-x-1/2 flex items-center gap-2 transition-all duration-300 ${isUserSpeaking ? 'opacity-100 transform translate-y-0' : 'opacity-0 transform translate-y-2'}`}>
-                       <div className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></div>
-                       <span className="text-[10px] uppercase font-bold tracking-widest text-emerald-400">Voice Detected</span>
-                     </div>
-                   )}
-                   <Visualizer isActive={isSessionActive} volume={volume} />
+                 <div className="relative flex flex-col items-center">
+                   
+                   {/* Realtime "Live Input" HUD Text */}
+                   <div className="absolute -top-32 w-[600px] text-center pointer-events-none z-20 min-h-[60px] flex items-end justify-center">
+                      {liveInputText && (
+                        <span className="text-3xl md:text-4xl font-light text-transparent bg-clip-text bg-gradient-to-r from-cyan-200 via-white to-cyan-200 animate-in fade-in zoom-in-95 duration-200 leading-tight drop-shadow-[0_0_15px_rgba(34,211,238,0.5)]">
+                          {liveInputText}
+                        </span>
+                      )}
+                      {!liveInputText && isUserSpeaking && (
+                         <div className="flex items-center gap-1.5 opacity-50">
+                            <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+                            <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+                            <div className="w-1.5 h-1.5 bg-cyan-400 rounded-full animate-bounce"></div>
+                         </div>
+                      )}
+                   </div>
+
+                   {/* Visualizer */}
+                   <Visualizer isActive={isSessionActive} isUserSpeaking={isUserSpeaking} volume={volume} />
                  </div>
               )}
             </div>
@@ -899,16 +923,15 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
                   <div key={idx} className={`flex ${t.role === 'user' ? 'justify-end' : 'justify-start'} animate-in fade-in slide-in-from-bottom-2`}>
                      <div className={`max-w-[80%] rounded-2xl px-5 py-3 text-sm leading-relaxed ${
                        t.role === 'user' 
-                       ? 'bg-slate-800 text-slate-200 rounded-tr-sm border border-slate-700' 
+                       ? 'bg-slate-800 text-slate-200 rounded-tr-sm border border-slate-700 opacity-60' 
                        : 'bg-indigo-600/20 text-indigo-100 rounded-tl-sm border border-indigo-500/30 backdrop-blur-sm'
                      }`}>
                        <ReactMarkdown>{t.text}</ReactMarkdown>
-                       {!t.isComplete && <span className="inline-block w-1.5 h-4 ml-1 align-middle bg-current opacity-50 animate-blink">|</span>}
                      </div>
                   </div>
                ))}
                {transcripts.length === 0 && isSessionActive && (
-                 <div className="text-center text-slate-500 text-sm italic mt-auto">
+                 <div className="text-center text-slate-500 text-sm italic mt-auto opacity-0 animate-in fade-in duration-1000">
                    "Hey {user.name}, what are you looking forward to search today?"
                  </div>
                )}

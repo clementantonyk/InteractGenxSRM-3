@@ -11,106 +11,94 @@ export const performWebSearch = async (query: string): Promise<{ text: string; s
 
     const ai = new GoogleGenAI({ apiKey });
 
-    // Enhanced prompt to extract structured data
+    // Enhanced prompt to extract structured data AND organic results
     const systemPrompt = `
-    You are an advanced search assistant. 
-    1. Search for the query and provide a comprehensive summary.
-    2. AFTER the summary, check if the query fits one of these categories:
-       - COMPARISON (e.g., "A vs B"): Extract key features and generate a comparison table.
-       - TIMELINE (e.g., "History of...", "Evolution of..."): Extract chronological events.
-       - STATISTICS (e.g., "Stock price", "Population", "GDP"): Extract key numbers.
-       - CONCEPT/COMPLEX TOPIC (e.g. "How does Blockchain work", "Ecosystem of AI"): Generate a knowledge graph.
+    You are an advanced search engine AI.
     
-    3. If it fits, append a JSON block at the very end of your response inside \`\`\`json ... \`\`\` tags.
+    TASK:
+    1. Perform a search for the user's query.
+    2. Generate an "AI Overview" summary of the answer.
+    3. Construct a list of "Organic Search Results" based on the grounding info you found.
+    4. Detect if a smart widget (Comparison, Timeline, etc.) is needed.
+
+    OUTPUT FORMAT:
+    You must return a JSON object wrapped in \`\`\`json ... \`\`\`. 
     
-    JSON Formats:
-    
-    For Comparison:
+    The JSON structure must be:
     {
-      "type": "comparison",
-      "title": "Comparison Title",
-      "comparisonData": {
-        "headers": ["Feature", "Item 1 Name", "Item 2 Name"],
-        "rows": [
-          { "feature": "Battery", "values": ["20h", "24h"] },
-          { "feature": "Price", "values": ["$999", "$899"] }
-        ]
-      }
-    }
-    
-    For Timeline:
-    {
-      "type": "timeline",
-      "title": "Timeline Title",
-      "timelineData": [
-        { "year": "2020", "title": "Event Name", "description": "Short description" }
-      ]
-    }
-    
-    For Stats:
-    {
-      "type": "stats",
-      "title": "Key Statistics",
-      "statsData": [
-        { "label": "Market Cap", "value": "$3T", "trend": "up" },
-        { "label": "Employees", "value": "150,000", "trend": "neutral" }
-      ]
+      "aiOverview": "The markdown formatted summary text...",
+      "organicResults": [
+        { 
+          "title": "Page Title", 
+          "url": "https://example.com", 
+          "siteName": "Example.com", 
+          "snippet": "A brief 2 sentence description...", 
+          "date": "Oct 2023" (optional)
+        }
+      ],
+      "widget": { ... } (Optional)
     }
 
-    For Knowledge Graph (Limit to max 6 sub-nodes):
-    {
-      "type": "graph",
-      "title": "Topic Ecosystem",
-      "graphData": {
-         "nodes": [
-            { "id": "1", "label": "Main Topic", "type": "main" },
-            { "id": "2", "label": "Sub Concept A", "type": "sub" },
-            { "id": "3", "label": "Sub Concept B", "type": "sub" }
-         ],
-         "links": [
-            { "source": "1", "target": "2" },
-            { "source": "1", "target": "3" }
-         ]
-      }
-    }
+    WIDGET FORMATS (populate "widget" field if applicable):
+    - Comparison: { "type": "comparison", "title": "...", "comparisonData": { "headers": ["Feature", "A", "B"], "rows": [{ "feature": "Price", "values": ["$1", "$2"] }] } }
+    - Timeline: { "type": "timeline", "title": "...", "timelineData": [{ "year": "2020", "title": "...", "description": "..." }] }
+    - Stats: { "type": "stats", "title": "...", "statsData": [{ "label": "GDP", "value": "$1T", "trend": "up" }] }
+    - Graph: { "type": "graph", "title": "...", "graphData": { "nodes": [{"id":"1", "label":"Main", "type":"main"}], "links": [] } }
+
+    CRITICAL: 
+    - Ensure 'organicResults' has at least 6 high quality items.
+    - The 'aiOverview' should be concise but informative (Markdown supported).
     `;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3-pro-preview",
+      model: "gemini-2.5-flash",
       contents: `${systemPrompt}\n\nUser Query: ${query}`,
       config: {
         tools: [{ googleSearch: {} }],
       },
     });
 
-    let text = response.text || "No results found.";
+    const rawText = response.text || "";
+    let parsedData: any = {};
+    let text = rawText;
+    let sources: SearchResult[] = [];
     let widget: SmartWidgetData | undefined = undefined;
 
     // Extract JSON widget data if present
-    const jsonMatch = text.match(/```json\n([\s\S]*?)\n```/);
+    const jsonMatch = rawText.match(/```json\n([\s\S]*?)\n```/);
     if (jsonMatch && jsonMatch[1]) {
       try {
-        widget = JSON.parse(jsonMatch[1]);
-        // Remove the JSON block from the display text to keep it clean
-        text = text.replace(jsonMatch[0], '').trim();
-      } catch (e) {
-        console.error("Failed to parse widget JSON", e);
-      }
-    }
-
-    const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-    
-    const sources: SearchResult[] = chunks
-      .map((chunk) => {
-        if (chunk.web) {
-          return {
-            title: chunk.web.title || "Web Result",
-            url: chunk.web.uri || "#",
-          };
+        parsedData = JSON.parse(jsonMatch[1]);
+        
+        text = parsedData.aiOverview || "Here is what I found.";
+        widget = parsedData.widget;
+        
+        if (parsedData.organicResults && Array.isArray(parsedData.organicResults)) {
+            sources = parsedData.organicResults;
         }
-        return null;
-      })
-      .filter((s): s is SearchResult => s !== null);
+
+      } catch (e) {
+        console.error("Failed to parse search JSON", e);
+        // Fallback: use raw text if JSON parsing fails, but strip the code block
+        text = rawText.replace(/```json\n[\s\S]*?\n```/, '').trim();
+      }
+    } else {
+       // Fallback if model didn't output JSON
+       const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+       sources = chunks
+        .map((chunk): SearchResult | null => {
+            if (chunk.web) {
+            return {
+                title: chunk.web.title || "Web Result",
+                url: chunk.web.uri || "#",
+                siteName: new URL(chunk.web.uri || "http://web").hostname,
+                snippet: "Source found via Google Search grounding."
+            };
+            }
+            return null;
+        })
+        .filter((s): s is SearchResult => s !== null);
+    }
 
     return { text, sources, widget };
   } catch (error) {

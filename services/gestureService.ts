@@ -14,8 +14,35 @@ export const initializeGestureRecognizer = async (): Promise<void> => {
       "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.8/wasm"
     );
 
+    // Helper to suppress noisy TFLite logs during initialization
+    const suppressConsole = () => {
+      const originalInfo = console.info;
+      const originalLog = console.log;
+      
+      const filter = (args: any[]) => {
+         return typeof args[0] === 'string' && 
+                (args[0].includes("Created TensorFlow Lite XNNPACK delegate for CPU") || 
+                 args[0].includes("XNNPACK"));
+      };
+
+      console.info = (...args: any[]) => {
+        if (filter(args)) return;
+        originalInfo.apply(console, args);
+      };
+      
+      console.log = (...args: any[]) => {
+         if (filter(args)) return;
+         originalLog.apply(console, args);
+      };
+
+      return () => { 
+          console.info = originalInfo;
+          console.log = originalLog;
+      };
+    };
+
     try {
-      // Attempt to initialize with GPU delegate first to avoid CPU XNNPACK logs and improve performance
+      // Attempt to initialize with GPU delegate first
       gestureRecognizer = await GestureRecognizer.createFromOptions(vision, {
         baseOptions: {
           modelAssetPath:
@@ -27,19 +54,22 @@ export const initializeGestureRecognizer = async (): Promise<void> => {
       });
       console.log("Gesture Recognizer initialized (GPU)");
     } catch (gpuError) {
-      console.warn("GPU initialization failed, falling back to CPU:", gpuError);
-      
-      // Fallback to CPU if GPU fails. This works on all devices but may log XNNPACK info.
-      gestureRecognizer = await GestureRecognizer.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath:
-            "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task",
-          delegate: "CPU",
-        },
-        runningMode: "VIDEO",
-        numHands: 1,
-      });
-      console.log("Gesture Recognizer initialized (CPU)");
+      // Fallback to CPU if GPU fails, suppressing the XNNPACK info log
+      const restoreConsole = suppressConsole();
+      try {
+        gestureRecognizer = await GestureRecognizer.createFromOptions(vision, {
+          baseOptions: {
+            modelAssetPath:
+              "https://storage.googleapis.com/mediapipe-models/gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task",
+            delegate: "CPU",
+          },
+          runningMode: "VIDEO",
+          numHands: 1,
+        });
+        console.log("Gesture Recognizer initialized (CPU)");
+      } finally {
+        restoreConsole();
+      }
     }
   } catch (error) {
     console.error("Failed to initialize gesture recognizer:", error);

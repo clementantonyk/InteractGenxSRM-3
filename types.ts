@@ -18,7 +18,9 @@ export interface UserProfile {
 export interface SearchResult {
   title: string;
   url: string;
+  siteName?: string;
   snippet?: string;
+  date?: string;
 }
 
 export interface ChatMessage {

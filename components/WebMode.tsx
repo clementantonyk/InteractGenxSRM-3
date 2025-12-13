@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Search, Globe, ExternalLink, Loader2, Sparkles, TrendingUp, History, Mic, MicOff } from 'lucide-react';
+import { Search, Mic, MicOff, Sparkles, MoreVertical, Globe, Share2 } from 'lucide-react';
 import { performWebSearch } from '../services/gemini';
 import { SearchResult, SmartWidgetData } from '../types';
 import ReactMarkdown from 'react-markdown';
@@ -22,7 +22,6 @@ export const WebMode: React.FC = () => {
   const recognitionRef = useRef<any>(null);
 
   useEffect(() => {
-    // Basic browser speech recognition setup
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
       const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
       recognitionRef.current = new SpeechRecognition();
@@ -55,10 +54,11 @@ export const WebMode: React.FC = () => {
 
   const handleSearch = async (searchQuery: string) => {
     if (!searchQuery.trim()) return;
-
+    
     setQuery(searchQuery);
     setIsLoading(true);
     setResults(null);
+    
     const data = await performWebSearch(searchQuery);
     setResults(data);
     setIsLoading(false);
@@ -69,143 +69,211 @@ export const WebMode: React.FC = () => {
     handleSearch(query);
   };
 
-  return (
-    <div className="flex flex-col items-center w-full min-h-full px-4 pt-10 pb-20 max-w-4xl mx-auto">
-      
-      {/* Hero Section */}
-      <div className={`transition-all duration-700 w-full flex flex-col items-center ${results ? 'mt-0 mb-6 scale-95 origin-top' : 'mt-20 mb-12'}`}>
-        <div className={`mb-8 text-center transition-all duration-500 ${results ? 'opacity-0 h-0 overflow-hidden mb-0' : 'opacity-100'}`}>
-          <h2 className="text-5xl font-bold mb-4 bg-clip-text text-transparent bg-gradient-to-r from-blue-400 via-indigo-400 to-emerald-400 tracking-tight">
-            Alexis Search
+  // --- Initial Hero State ---
+  if (!results && !isLoading) {
+    return (
+      <div className="flex flex-col items-center justify-center w-full h-[80vh] px-4">
+        <div className="mb-10 text-center">
+          <h2 className="text-6xl md:text-8xl font-bold mb-4 tracking-tighter text-white">
+            Alexis
           </h2>
-          <p className="text-slate-400 text-lg">Next-Gen Generative Answers</p>
         </div>
 
-        <form onSubmit={onSubmit} className="w-full relative max-w-2xl mx-auto group">
-          <div className="absolute inset-0 bg-gradient-to-r from-blue-500 via-indigo-500 to-emerald-500 rounded-2xl blur opacity-30 group-hover:opacity-50 transition-all duration-500"></div>
-          <div className="relative flex items-center bg-slate-800/90 backdrop-blur-xl rounded-2xl shadow-2xl border border-slate-700/50 overflow-hidden transition-all focus-within:border-indigo-500/50 focus-within:ring-1 focus-within:ring-indigo-500/30">
+        <form onSubmit={onSubmit} className="w-full max-w-3xl mx-auto group relative z-20">
+          <div className="absolute inset-0 bg-gradient-to-r from-blue-500/20 via-indigo-500/20 to-purple-500/20 rounded-full blur-xl opacity-0 group-hover:opacity-100 transition-all duration-500"></div>
+          <div className="relative flex items-center bg-slate-800 rounded-full border border-slate-700 shadow-xl hover:shadow-2xl hover:border-slate-600 transition-all">
             <Search className="w-5 h-5 ml-6 text-slate-400" />
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Ask anything..."
-              className="w-full bg-transparent px-4 py-5 text-xl text-white placeholder-slate-500 focus:outline-none"
+              placeholder="Search anything..."
+              className="w-full bg-transparent px-4 py-4 text-lg text-white placeholder-slate-500 focus:outline-none"
             />
             
-            {/* Voice Button */}
             <button
               type="button"
               onClick={toggleMic}
-              className={`p-3 mr-1 rounded-xl transition-all ${isMicListening ? 'text-red-400 bg-red-500/10 animate-pulse' : 'text-slate-400 hover:text-white hover:bg-slate-700/50'}`}
-              title="Voice Search"
+              className={`p-3 mr-2 rounded-full transition-all ${isMicListening ? 'text-red-400 bg-red-500/10' : 'text-slate-400 hover:text-white'}`}
             >
               {isMicListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-            </button>
-
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="mr-2 bg-slate-700/50 hover:bg-indigo-600 text-white p-3 rounded-xl transition-all disabled:opacity-50 disabled:hover:bg-slate-700/50"
-            >
-              {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
             </button>
           </div>
         </form>
 
-        {/* Quick Prompts - Only show when no results */}
-        {!results && !isLoading && (
-           <div className="mt-8 flex flex-wrap justify-center gap-3 animate-in fade-in slide-in-from-bottom-4 duration-700 delay-100">
+        <div className="mt-8 flex flex-wrap justify-center gap-3">
              {QUICK_PROMPTS.map((prompt) => (
                <button
                  key={prompt}
                  onClick={() => handleSearch(prompt)}
-                 className="px-4 py-2 bg-slate-800/50 border border-slate-700 rounded-full text-sm text-slate-300 hover:bg-slate-800 hover:text-white hover:border-indigo-500/50 transition-all flex items-center gap-2"
+                 className="px-4 py-2 bg-slate-800/50 border border-slate-700/50 rounded-lg text-sm text-slate-400 hover:bg-slate-800 hover:text-white transition-all"
                >
-                 {prompt.includes("vs") && <div className="w-2 h-2 rounded-full bg-orange-400"></div>}
-                 {prompt.includes("Stock") && <TrendingUp className="w-3 h-3 text-emerald-400" />}
-                 {prompt.includes("Blockchain") && <div className="w-2 h-2 rounded-full bg-purple-400"></div>}
                  {prompt}
                </button>
              ))}
+        </div>
+      </div>
+    );
+  }
+
+  // --- Results State ---
+  return (
+    <div className="flex flex-col w-full min-h-screen bg-slate-900">
+      
+      {/* Sticky Header - Full Width */}
+      <div className="sticky top-0 z-50 bg-slate-900 border-b border-slate-800">
+        <div className="w-full px-6 lg:px-10 h-20 flex items-center gap-6">
+           <div className="hidden md:flex items-center gap-2 cursor-pointer" onClick={() => { setResults(null); setQuery(''); }}>
+              <span className="text-2xl font-bold text-white tracking-tight">Alexis</span>
            </div>
-        )}
+           
+           <form onSubmit={onSubmit} className="flex-1 max-w-3xl relative">
+              <div className="flex items-center bg-slate-800 rounded-full border border-slate-700 focus-within:border-indigo-500 focus-within:ring-1 focus-within:ring-indigo-500/50">
+                <input
+                  type="text"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                  className="w-full bg-transparent px-5 py-2.5 text-base text-white placeholder-slate-500 focus:outline-none"
+                />
+                <div className="flex items-center pr-2 border-l border-slate-700 pl-2">
+                   <button type="submit" className="p-2 text-indigo-400 hover:text-white">
+                     <Search className="w-5 h-5" />
+                   </button>
+                </div>
+              </div>
+           </form>
+
+           {/* Placeholder for Profile/Settings */}
+           <div className="w-8 h-8 rounded-full bg-indigo-600 hidden md:block"></div>
+        </div>
+        
+        {/* Navigation Tabs - Full Width */}
+        <div className="w-full px-6 lg:px-10 flex gap-6 text-sm text-slate-400">
+            <div className="py-3 border-b-2 border-indigo-500 text-white font-medium cursor-pointer">All</div>
+        </div>
       </div>
 
-      {/* Results Area */}
-      {results && (
-        <div className="w-full space-y-8 animate-in fade-in slide-in-from-bottom-8 duration-700">
-          
-          {/* Main Answer Card */}
-          <div className="bg-slate-800/40 backdrop-blur-md border border-slate-700/50 rounded-2xl p-8 shadow-xl relative overflow-hidden">
-            <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 to-emerald-500 opacity-50"></div>
-            
-            {/* Smart Widget Injection */}
-            {results.widget && (
-                <SmartWidgets 
-                  data={results.widget} 
-                  onNodeClick={(label) => handleSearch(label)} 
-                />
-            )}
-            
-            {/* Prose Content */}
-            <div className="prose prose-invert prose-lg max-w-none">
-              <ReactMarkdown
-                components={{
-                  h1: ({node, ...props}) => <h1 className="text-3xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-indigo-200 to-blue-200 mb-6" {...props} />,
-                  h2: ({node, ...props}) => <h2 className="text-2xl font-semibold text-indigo-300 mt-8 mb-4 pb-2 border-b border-slate-700" {...props} />,
-                  h3: ({node, ...props}) => <h3 className="text-xl font-medium text-blue-300 mt-6 mb-3" {...props} />,
-                  a: ({node, ...props}) => <a className="text-blue-400 hover:text-blue-300 underline decoration-blue-400/30 hover:decoration-blue-300 transition-colors" target="_blank" rel="noopener noreferrer" {...props} />,
-                  ul: ({node, ...props}) => <ul className="list-disc list-outside ml-6 space-y-2 text-slate-300 marker:text-indigo-500" {...props} />,
-                  ol: ({node, ...props}) => <ol className="list-decimal list-outside ml-6 space-y-2 text-slate-300 marker:text-indigo-500" {...props} />,
-                  strong: ({node, ...props}) => <strong className="font-bold text-white" {...props} />,
-                  blockquote: ({node, ...props}) => <blockquote className="border-l-4 border-indigo-500 pl-4 py-1 italic text-slate-400 bg-slate-800/50 rounded-r-lg my-4" {...props} />,
-                  code: ({node, ...props}) => <code className="bg-slate-900 text-emerald-400 px-1.5 py-0.5 rounded text-sm font-mono border border-slate-700" {...props} />,
-                }}
-              >
-                {results.text}
-              </ReactMarkdown>
-            </div>
-          </div>
-
-          {/* Source Grid */}
-          {results.sources.length > 0 && (
-            <div className="space-y-4">
-               <h3 className="text-sm font-semibold text-slate-400 uppercase tracking-wider pl-2 flex items-center gap-2">
-                 <Globe className="w-4 h-4" /> Sources
-               </h3>
-               <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-2">
-                {results.sources.map((source, idx) => (
-                  <a
-                    key={idx}
-                    href={source.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="flex flex-col group bg-slate-800/30 border border-slate-700/50 hover:border-blue-500/30 rounded-xl p-5 transition-all hover:bg-slate-800/60 hover:shadow-lg hover:shadow-blue-900/10 hover:-translate-y-1"
-                  >
-                    <div className="flex items-start justify-between w-full mb-2">
-                       <div className="flex items-center gap-2">
-                          <img 
-                            src={`https://www.google.com/s2/favicons?domain=${new URL(source.url).hostname}&sz=32`} 
-                            alt="" 
-                            className="w-5 h-5 rounded-sm opacity-70 group-hover:opacity-100 transition-opacity"
-                          />
-                          <span className="text-xs font-mono text-slate-500 group-hover:text-blue-400 transition-colors truncate">
-                            {new URL(source.url).hostname}
-                          </span>
-                       </div>
-                       <ExternalLink className="w-4 h-4 text-slate-600 group-hover:text-blue-400 transition-colors opacity-0 group-hover:opacity-100" />
-                    </div>
-                    <h3 className="font-medium text-slate-200 group-hover:text-white transition-colors line-clamp-2">
-                      {source.title}
-                    </h3>
-                  </a>
-                ))}
+      {/* Main Content Area - Full Width with wide max constraint */}
+      <div className="flex-1 w-full max-w-[2000px] mx-auto px-6 lg:px-10 py-6 flex gap-12 justify-center">
+        
+        {/* Left Column (Main Results) - Grows to fill but readable max width */}
+        <div className="flex-1 max-w-4xl space-y-8">
+           
+           {isLoading && (
+              <div className="space-y-4 animate-pulse">
+                 <div className="h-40 bg-slate-800/50 rounded-2xl"></div>
+                 <div className="h-20 bg-slate-800/30 rounded-xl"></div>
+                 <div className="h-20 bg-slate-800/30 rounded-xl"></div>
               </div>
-            </div>
-          )}
+           )}
+
+           {!isLoading && results && (
+             <>
+                {/* AI Overview Section */}
+                <div className="rounded-2xl overflow-hidden border border-indigo-500/30 bg-slate-800/20 relative animate-in fade-in slide-in-from-bottom-2">
+                    {/* Gradient Top Bar */}
+                    <div className="h-1.5 w-full bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500"></div>
+                    
+                    <div className="p-8">
+                        <div className="flex items-center justify-between mb-6">
+                            <div className="flex items-center gap-2">
+                                <Sparkles className="w-6 h-6 text-indigo-400" />
+                                <h3 className="text-xl font-bold text-white">AI Overview</h3>
+                            </div>
+                            <div className="flex gap-2">
+                                <button className="p-2 hover:bg-slate-700 rounded text-slate-400"><Share2 className="w-4 h-4"/></button>
+                                <button className="p-2 hover:bg-slate-700 rounded text-slate-400"><MoreVertical className="w-4 h-4"/></button>
+                            </div>
+                        </div>
+
+                        <div className="prose prose-invert prose-lg max-w-none text-slate-200">
+                            <ReactMarkdown 
+                            components={{
+                                a: ({node, ...props}) => <span className="text-indigo-300 font-medium hover:underline cursor-pointer" {...props} />
+                            }}
+                            >
+                                {results.text}
+                            </ReactMarkdown>
+                        </div>
+
+                        {/* Smart Widget Injection inside AI Overview */}
+                        {results.widget && (
+                            <div className="mt-8 border-t border-slate-700/50 pt-6">
+                                <SmartWidgets 
+                                data={results.widget} 
+                                onNodeClick={(label) => handleSearch(label)} 
+                                />
+                            </div>
+                        )}
+                    </div>
+                </div>
+
+                {/* STANDARD ORGANIC RESULTS */}
+                <div className="space-y-6 mt-8">
+                    {results.sources.map((result, idx) => (
+                        <div key={idx} className="group animate-in fade-in slide-in-from-bottom-4 bg-slate-800/30 p-4 rounded-xl hover:bg-slate-800/50 transition-all border border-transparent hover:border-slate-700" style={{ animationDelay: `${idx * 50}ms` }}>
+                            <div className="flex flex-col gap-2">
+                                {/* Favicon & Site Name */}
+                                <div className="flex items-center gap-3 text-sm text-slate-400">
+                                  <div className="w-8 h-8 bg-slate-800 rounded-lg flex items-center justify-center overflow-hidden border border-slate-700">
+                                      <img 
+                                          src={`https://www.google.com/s2/favicons?domain=${new URL(result.url).hostname}&sz=32`} 
+                                          alt="favicon"
+                                          className="w-5 h-5 opacity-70"
+                                          onError={(e) => { (e.target as HTMLImageElement).style.display = 'none'; }}
+                                      />
+                                  </div>
+                                  <div className="flex flex-col leading-tight">
+                                      <span className="font-medium text-slate-300">{result.siteName || new URL(result.url).hostname}</span>
+                                      <span className="text-xs text-slate-500 truncate max-w-[300px]">{result.url}</span>
+                                  </div>
+                                </div>
+                                
+                                {/* Title */}
+                                <a href={result.url} target="_blank" rel="noreferrer" className="block">
+                                  <h3 className="text-xl text-blue-400 group-hover:underline visited:text-purple-400 font-medium tracking-tight">
+                                      {result.title}
+                                  </h3>
+                                </a>
+                                
+                                {/* Snippet */}
+                                <div className="text-base text-slate-400 leading-relaxed">
+                                  {result.date && <span className="text-slate-500 text-xs mr-2">{result.date} —</span>}
+                                  {result.snippet || "No description available for this result. Click to view the page."}
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+             </>
+           )}
         </div>
-      )}
+
+        {/* Right Sidebar (Knowledge Panel) - Sticky */}
+        {results && !isLoading && (
+          <div className="hidden xl:block w-96 flex-shrink-0">
+             <div className="sticky top-28 space-y-6">
+                <div className="bg-slate-800/30 rounded-2xl border border-slate-700/50 p-6 backdrop-blur-sm">
+                    <h4 className="font-bold text-white mb-3 text-lg">About this topic</h4>
+                    <div className="flex items-start gap-4 mb-4">
+                      <div className="bg-slate-700 h-20 w-20 rounded-xl flex-shrink-0 flex items-center justify-center border border-slate-600">
+                          <Globe className="w-10 h-10 text-slate-500" />
+                      </div>
+                      <p className="text-sm text-slate-400 leading-relaxed">
+                          Alexis has synthesized this information from {results.sources.length} sources found across the web.
+                      </p>
+                    </div>
+                    <div className="space-y-3">
+                      <div className="h-2 w-3/4 bg-slate-700/50 rounded animate-pulse"></div>
+                      <div className="h-2 w-full bg-slate-700/50 rounded animate-pulse"></div>
+                      <div className="h-2 w-5/6 bg-slate-700/50 rounded animate-pulse"></div>
+                    </div>
+                </div>
+             </div>
+          </div>
+        )}
+
+      </div>
     </div>
   );
 };

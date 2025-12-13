@@ -3,11 +3,12 @@ import { AppMode, UserProfile } from './types';
 import { Onboarding } from './components/Onboarding';
 import { WebMode } from './components/WebMode';
 import { CompanionMode } from './components/CompanionMode';
-import { Search, Sparkles } from 'lucide-react';
+import { Search, Sparkles, LogOut, Maximize, Minimize } from 'lucide-react';
 
 export default function App() {
   const [mode, setMode] = useState<AppMode>(AppMode.ONBOARDING);
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   // Load user from local storage
   useEffect(() => {
@@ -18,18 +19,44 @@ export default function App() {
     }
   }, []);
 
-  const handleOnboardingComplete = (profile: UserProfile) => {
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, []);
+
+  const handleLoginSuccess = (profile: UserProfile) => {
     setUser(profile);
     localStorage.setItem('alexis_user', JSON.stringify(profile));
-    setMode(AppMode.COMPANION); // Default to companion after sign up for wow factor
+    setMode(AppMode.COMPANION); // Default to companion after sign in for wow factor
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('alexis_user');
+    setUser(null);
+    setMode(AppMode.ONBOARDING);
   };
 
   const toggleMode = (targetMode: AppMode) => {
     setMode(targetMode);
   };
 
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch((e) => {
+        console.error("Failed to enter fullscreen", e);
+      });
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen();
+      }
+    }
+  };
+
   if (mode === AppMode.ONBOARDING) {
-    return <Onboarding onComplete={handleOnboardingComplete} />;
+    return <Onboarding onComplete={handleLoginSuccess} />;
   }
 
   return (
@@ -66,8 +93,35 @@ export default function App() {
           </button>
         </div>
         
-        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-purple-500 to-indigo-500 flex items-center justify-center text-xs font-bold border border-white/10 shrink-0">
-          {user?.name.charAt(0).toUpperCase()}
+        <div className="flex items-center gap-4">
+           {/* Fullscreen Toggle */}
+           <button 
+             onClick={toggleFullscreen}
+             className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-full transition-colors hidden sm:block"
+             title={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+           >
+             {isFullscreen ? <Minimize className="w-5 h-5" /> : <Maximize className="w-5 h-5" />}
+           </button>
+
+          <div className="flex items-center gap-3">
+             <div className="text-right hidden sm:block">
+                <div className="text-xs text-slate-400">Signed in as</div>
+                <div className="text-sm font-medium text-white">{user?.name}</div>
+             </div>
+             <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-purple-500 to-indigo-500 flex items-center justify-center text-xs font-bold border border-white/10 shrink-0 shadow-lg">
+               {user?.name.charAt(0).toUpperCase()}
+             </div>
+          </div>
+          
+          <div className="h-6 w-px bg-slate-700 hidden sm:block"></div>
+          
+          <button 
+             onClick={handleLogout}
+             className="p-2 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded-full transition-colors"
+             title="Log Out"
+          >
+             <LogOut className="w-5 h-5" />
+          </button>
         </div>
       </div>
 
