@@ -4,10 +4,15 @@ export enum AppMode {
   COMPANION = 'COMPANION',
 }
 
+export interface UserPreferences {
+  communicationStyle: 'brief' | 'detailed' | 'casual' | 'professional';
+}
+
 export interface UserProfile {
   name: string;
   email: string;
   age: string;
+  preferences?: UserPreferences;
 }
 
 export interface SearchResult {

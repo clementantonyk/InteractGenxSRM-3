@@ -76,7 +76,7 @@ export const performWebSearch = async (query: string): Promise<{ text: string; s
     `;
 
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash",
+      model: "gemini-3-pro-preview",
       contents: `${systemPrompt}\n\nUser Query: ${query}`,
       config: {
         tools: [{ googleSearch: {} }],
