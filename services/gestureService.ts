@@ -1,6 +1,7 @@
 import { GestureRecognizer, FilesetResolver } from "@mediapipe/tasks-vision";
 
 let gestureRecognizer: GestureRecognizer | null = null;
+let lastTimestamp = -1;
 
 export const initializeGestureRecognizer = async (): Promise<void> => {
   if (gestureRecognizer) return;
@@ -19,7 +20,7 @@ export const initializeGestureRecognizer = async (): Promise<void> => {
       runningMode: "VIDEO",
       numHands: 1,
     });
-    console.log("Gesture Recognizer initialized");
+    console.log("Gesture Recognizer initialized (GPU)");
   } catch (error) {
     console.error("Failed to initialize gesture recognizer:", error);
   }
@@ -29,13 +30,20 @@ export const detectGesture = (video: HTMLVideoElement): string | null => {
   if (!gestureRecognizer || !video || video.readyState < 2) return null;
 
   try {
-    const results = gestureRecognizer.recognizeForVideo(video, Date.now());
-    if (results.gestures.length > 0 && results.gestures[0].length > 0) {
-      // Return the category name of the highest confidence gesture
-      return results.gestures[0][0].categoryName;
+    const nowInMs = Date.now();
+    
+    // MediaPipe 'VIDEO' mode requires strictly increasing timestamps
+    if (nowInMs > lastTimestamp) {
+      lastTimestamp = nowInMs;
+      const results = gestureRecognizer.recognizeForVideo(video, nowInMs);
+      
+      if (results.gestures.length > 0 && results.gestures[0].length > 0) {
+        // Return the category name of the highest confidence gesture
+        return results.gestures[0][0].categoryName;
+      }
     }
   } catch (e) {
-    // Ignore frame errors
+    // Suppress frame processing errors to prevent console spam
   }
   return null;
 };

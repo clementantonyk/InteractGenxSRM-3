@@ -1,20 +1,57 @@
-import React, { useState } from 'react';
-import { Search, Globe, ExternalLink, Loader2, Sparkles, TrendingUp, History } from 'lucide-react';
+import React, { useState, useRef, useEffect } from 'react';
+import { Search, Globe, ExternalLink, Loader2, Sparkles, TrendingUp, History, Mic, MicOff } from 'lucide-react';
 import { performWebSearch } from '../services/gemini';
-import { SearchResult } from '../types';
+import { SearchResult, SmartWidgetData } from '../types';
 import ReactMarkdown from 'react-markdown';
+import { SmartWidgets } from './SmartWidgets';
 
 const QUICK_PROMPTS = [
-  "Latest Tech News",
-  "Easy Dinner Recipes",
-  "Stock Market Today",
-  "Travel Destinations 2025"
+  "Pixel 9 vs iPhone 15",
+  "History of Artificial Intelligence",
+  "Tesla Stock Performance",
+  "How does Blockchain work"
 ];
 
 export const WebMode: React.FC = () => {
   const [query, setQuery] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [results, setResults] = useState<{ text: string; sources: SearchResult[] } | null>(null);
+  const [results, setResults] = useState<{ text: string; sources: SearchResult[]; widget?: SmartWidgetData } | null>(null);
+  const [isMicListening, setIsMicListening] = useState(false);
+
+  // Voice Search Refs
+  const recognitionRef = useRef<any>(null);
+
+  useEffect(() => {
+    // Basic browser speech recognition setup
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = false;
+      recognitionRef.current.interimResults = false;
+      
+      recognitionRef.current.onresult = (event: any) => {
+        const transcript = event.results[0][0].transcript;
+        setQuery(transcript);
+        handleSearch(transcript);
+        setIsMicListening(false);
+      };
+      
+      recognitionRef.current.onerror = () => setIsMicListening(false);
+      recognitionRef.current.onend = () => setIsMicListening(false);
+    }
+  }, []);
+
+  const toggleMic = () => {
+    if (!recognitionRef.current) return;
+    
+    if (isMicListening) {
+      recognitionRef.current.stop();
+      setIsMicListening(false);
+    } else {
+      recognitionRef.current.start();
+      setIsMicListening(true);
+    }
+  };
 
   const handleSearch = async (searchQuery: string) => {
     if (!searchQuery.trim()) return;
@@ -36,31 +73,42 @@ export const WebMode: React.FC = () => {
     <div className="flex flex-col items-center w-full min-h-full px-4 pt-10 pb-20 max-w-4xl mx-auto">
       
       {/* Hero Section */}
-      <div className={`transition-all duration-700 ${results ? 'mt-0 mb-6 scale-90 origin-top' : 'mt-20 mb-12'}`}>
-        <div className="mb-8 text-center">
+      <div className={`transition-all duration-700 w-full flex flex-col items-center ${results ? 'mt-0 mb-6 scale-95 origin-top' : 'mt-20 mb-12'}`}>
+        <div className={`mb-8 text-center transition-all duration-500 ${results ? 'opacity-0 h-0 overflow-hidden mb-0' : 'opacity-100'}`}>
           <h2 className="text-5xl font-bold mb-4 bg-clip-text text-transparent bg-gradient-to-r from-blue-400 via-indigo-400 to-emerald-400 tracking-tight">
-            Web Mode
+            Alexis Search
           </h2>
-          <p className="text-slate-400 text-lg">Search the knowledge of the world</p>
+          <p className="text-slate-400 text-lg">Next-Gen Generative Answers</p>
         </div>
 
         <form onSubmit={onSubmit} className="w-full relative max-w-2xl mx-auto group">
           <div className="absolute inset-0 bg-gradient-to-r from-blue-500 via-indigo-500 to-emerald-500 rounded-2xl blur opacity-30 group-hover:opacity-50 transition-all duration-500"></div>
-          <div className="relative flex items-center bg-slate-800/90 backdrop-blur-xl rounded-2xl shadow-2xl border border-slate-700/50 overflow-hidden transition-all focus-within:border-indigo-500/50">
-            <Search className="w-6 h-6 ml-6 text-slate-400" />
+          <div className="relative flex items-center bg-slate-800/90 backdrop-blur-xl rounded-2xl shadow-2xl border border-slate-700/50 overflow-hidden transition-all focus-within:border-indigo-500/50 focus-within:ring-1 focus-within:ring-indigo-500/30">
+            <Search className="w-5 h-5 ml-6 text-slate-400" />
             <input
               type="text"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="Ask anything..."
-              className="w-full bg-transparent px-6 py-5 text-xl text-white placeholder-slate-500 focus:outline-none"
+              className="w-full bg-transparent px-4 py-5 text-xl text-white placeholder-slate-500 focus:outline-none"
             />
+            
+            {/* Voice Button */}
+            <button
+              type="button"
+              onClick={toggleMic}
+              className={`p-3 mr-1 rounded-xl transition-all ${isMicListening ? 'text-red-400 bg-red-500/10 animate-pulse' : 'text-slate-400 hover:text-white hover:bg-slate-700/50'}`}
+              title="Voice Search"
+            >
+              {isMicListening ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+            </button>
+
             <button
               type="submit"
               disabled={isLoading}
               className="mr-2 bg-slate-700/50 hover:bg-indigo-600 text-white p-3 rounded-xl transition-all disabled:opacity-50 disabled:hover:bg-slate-700/50"
             >
-              {isLoading ? <Loader2 className="w-6 h-6 animate-spin" /> : <Sparkles className="w-6 h-6" />}
+              {isLoading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Sparkles className="w-5 h-5" />}
             </button>
           </div>
         </form>
@@ -74,7 +122,9 @@ export const WebMode: React.FC = () => {
                  onClick={() => handleSearch(prompt)}
                  className="px-4 py-2 bg-slate-800/50 border border-slate-700 rounded-full text-sm text-slate-300 hover:bg-slate-800 hover:text-white hover:border-indigo-500/50 transition-all flex items-center gap-2"
                >
-                 {prompt === "Latest Tech News" && <TrendingUp className="w-3 h-3 text-emerald-400" />}
+                 {prompt.includes("vs") && <div className="w-2 h-2 rounded-full bg-orange-400"></div>}
+                 {prompt.includes("Stock") && <TrendingUp className="w-3 h-3 text-emerald-400" />}
+                 {prompt.includes("Blockchain") && <div className="w-2 h-2 rounded-full bg-purple-400"></div>}
                  {prompt}
                </button>
              ))}
@@ -90,7 +140,15 @@ export const WebMode: React.FC = () => {
           <div className="bg-slate-800/40 backdrop-blur-md border border-slate-700/50 rounded-2xl p-8 shadow-xl relative overflow-hidden">
             <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-blue-500 to-emerald-500 opacity-50"></div>
             
-            {/* We use prose-invert (for dark mode) and customize specific elements via components prop */}
+            {/* Smart Widget Injection */}
+            {results.widget && (
+                <SmartWidgets 
+                  data={results.widget} 
+                  onNodeClick={(label) => handleSearch(label)} 
+                />
+            )}
+            
+            {/* Prose Content */}
             <div className="prose prose-invert prose-lg max-w-none">
               <ReactMarkdown
                 components={{

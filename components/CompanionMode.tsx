@@ -3,7 +3,7 @@ import { UserProfile, SearchResult } from '../types';
 import { GoogleGenAI, LiveServerMessage, Modality, FunctionDeclaration, Type } from '@google/genai';
 import { Visualizer } from './Visualizer';
 import { HoloCard, HoloData } from './HoloCard';
-import { Mic, MicOff, Video, VideoOff, LayoutGrid, X, RotateCcw, AlertCircle, Square, ScanEye, Globe, Sparkles, ExternalLink, ArrowRight, Hand, ThumbsDown, MousePointerClick, ChevronUp, ChevronDown } from 'lucide-react';
+import { Mic, MicOff, Video, VideoOff, LayoutGrid, X, RotateCcw, AlertCircle, Square, ScanEye, Globe, Sparkles, ExternalLink, ArrowRight, Hand, ThumbsDown, MousePointerClick, ChevronUp, ChevronDown, Command, HelpCircle, Eye, MessageSquare } from 'lucide-react';
 import { createPcmBlob, decodeAudioData, blobToBase64, base64ToUint8Array } from '../utils/audio-utils';
 import { performWebSearch } from '../services/gemini';
 import { initializeGestureRecognizer, detectGesture } from '../services/gestureService';
@@ -62,6 +62,7 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
   const [isSessionActive, setIsSessionActive] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [suggestedSites, setSuggestedSites] = useState<SearchResult[]>([]);
+  const [showHelp, setShowHelp] = useState(false);
   
   // HUD State
   const [holoData, setHoloData] = useState<HoloData | null>(null);
@@ -106,6 +107,7 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
   const streamRef = useRef<MediaStream | null>(null);
   const frameIntervalRef = useRef<number | null>(null);
   const gestureIntervalRef = useRef<number | null>(null);
+  const gestureProcessingRef = useRef(false);
   const initializedRef = useRef(false);
   const isResponseStoppedRef = useRef(false);
   const isSocketOpenRef = useRef(false);
@@ -132,6 +134,40 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
     initializeGestureRecognizer();
   }, []);
 
+  const playAudioCue = useCallback(() => {
+    try {
+      const ctx = outputAudioContextRef.current || new (window.AudioContext || (window as any).webkitAudioContext)();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      
+      // Futuristic 'confirm' blip
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(800, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(1400, ctx.currentTime + 0.1);
+      
+      gain.gain.setValueAtTime(0.1, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.15);
+      
+      osc.start();
+      osc.stop(ctx.currentTime + 0.15);
+    } catch (e) {
+      // Ignore audio errors
+    }
+  }, []);
+
+  const showCommandFeedback = useCallback((text: string, type: 'search' | 'scan' | 'think') => {
+    if (commandTimeoutRef.current) clearTimeout(commandTimeoutRef.current);
+    
+    // Play sound cue
+    playAudioCue();
+
+    setActiveCommand({ text, type });
+    commandTimeoutRef.current = setTimeout(() => setActiveCommand(null), 3000);
+  }, [playAudioCue]);
+
   const toggleMic = async () => {
     const newState = !isMicOn;
     setIsMicOn(newState);
@@ -139,19 +175,6 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
     setFeedbackMessage(newState ? "Microphone ON" : "Microphone OFF");
     feedbackTimeoutRef.current = setTimeout(() => setFeedbackMessage(null), 2000);
   };
-
-  const triggerScan = useCallback(() => {
-     setFeedbackMessage("Analyzing Visual...");
-     // In a real app, this would send a specific message to the model to analyze the current frame
-     // For now, we simulate the 'Scan this' voice command effect
-     if (sessionRef.current && isSocketOpenRef.current) {
-        // We can't easily force the model to 'think' it heard text without sending audio,
-        // but we can prompt the user visually.
-        // Or we could send a text prompt if the API supports it in this mode (it does via sendRealtimeInput text, but simpler to just set feedback)
-     }
-     if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
-     feedbackTimeoutRef.current = setTimeout(() => setFeedbackMessage(null), 3000);
-  }, []);
 
   const stopSpeaking = () => {
     isResponseStoppedRef.current = true;
@@ -162,14 +185,24 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
     if (outputAudioContextRef.current) {
       nextStartTimeRef.current = outputAudioContextRef.current.currentTime;
     }
+    
+    if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
+    setFeedbackMessage("Playback Stopped");
+    feedbackTimeoutRef.current = setTimeout(() => setFeedbackMessage(null), 2000);
   };
 
-  const showCommandFeedback = (text: string, type: 'search' | 'scan' | 'think') => {
-    if (commandTimeoutRef.current) clearTimeout(commandTimeoutRef.current);
-    setActiveCommand({ text, type });
-    commandTimeoutRef.current = setTimeout(() => setActiveCommand(null), 3000);
-  };
-  
+  const triggerScan = useCallback(() => {
+     setFeedbackMessage("Analyzing Visual...");
+     // In a real app, this would send a specific message to the model to analyze the current frame
+     // For now, we simulate the 'Scan this' voice command effect
+     if (sessionRef.current && isSocketOpenRef.current) {
+        // We can't easily force the model to 'think' it heard text without sending audio,
+        // but we can prompt the user visually.
+     }
+     if (feedbackTimeoutRef.current) clearTimeout(feedbackTimeoutRef.current);
+     feedbackTimeoutRef.current = setTimeout(() => setFeedbackMessage(null), 3000);
+  }, []);
+
   const showGestureFeedback = (action: string) => {
       setGestureAction(action);
       if (gestureActionTimeoutRef.current) clearTimeout(gestureActionTimeoutRef.current);
@@ -296,6 +329,7 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
       const ai = new GoogleGenAI({ apiKey });
       
       // Setup Audio Contexts
+      // Try to use 16000 first, but accept whatever the browser gives to avoid resampling issues at this stage
       inputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       outputAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       
@@ -313,7 +347,10 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
           noiseSuppression: true,
           autoGainControl: true,
         },
-        video: true 
+        video: {
+           width: { ideal: 320 }, // Request lower resolution
+           height: { ideal: 240 }
+        }
       });
       streamRef.current = stream;
       stream.getAudioTracks().forEach(track => { track.enabled = isMicOnRef.current; });
@@ -330,12 +367,22 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: 'Kore' } }
           },
-          inputAudioTranscription: {}, 
           outputAudioTranscription: {},
+          inputAudioTranscription: {}, // Enabled to show user captions
           systemInstruction: `You are Alexis, an AI browser companion. User: ${user.name}.
           
-          Guidelines:
-          - Be conversational, concise, and helpful.
+          Role & Persona:
+          - You are a high-performance technical assistant and browser co-pilot.
+          - You are highly proficient in software terminology, scientific concepts, and modern web slang.
+          - You have deep knowledge of technical jargon (e.g., React, Kubernetes, LLMs, Neural Networks, Blockchain, GPUs).
+          
+          Voice Recognition Context:
+          - The user is likely to use technical jargon. Bias your listening towards valid technical terms (e.g., "GUI" vs "gooey", "SQL" vs "sequel", "DOM" vs "dom", "JSON" vs "Jason").
+          - If a sentence seems incomplete, wait for context, but prioritize speed in understanding.
+
+          Interaction Guidelines:
+          - SPEAK AND LISTEN IN ENGLISH ONLY.
+          - Be conversational but concise. Avoid long filler phrases; get straight to the answer.
           - CRITICAL: If the user asks a question about recent events, facts, news, weather, or information you don't know, YOU MUST use the 'search_web' tool.
           - If the user asks to "scan", "analyze", "look at this", or "what is this", use the 'render_hud_overlay' tool.
           - When using tools, be patient and wait for the tool response before continuing.`,
@@ -355,19 +402,25 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
             
             if (inputAudioContextRef.current && streamRef.current) {
               const source = inputAudioContextRef.current.createMediaStreamSource(streamRef.current);
-              // Reduced buffer size to 2048 (approx 128ms) for better latency while maintaining stability
-              const scriptProcessor = inputAudioContextRef.current.createScriptProcessor(2048, 1, 1);
+              // Increased buffer size to 4096 to reduce main thread CPU load and network packet frequency
+              const scriptProcessor = inputAudioContextRef.current.createScriptProcessor(4096, 1, 1);
               
               scriptProcessor.onaudioprocess = (e) => {
                 if (!isMicOnRef.current || !isSocketOpenRef.current) return;
                 
                 const inputData = e.inputBuffer.getChannelData(0);
-                const pcmBlob = createPcmBlob(inputData);
+                // Pass the actual sample rate to the blob creator for downsampling
+                const pcmBlob = createPcmBlob(inputData, inputAudioContextRef.current?.sampleRate || 48000);
                 
-                // Only send if session is established to prevent queue drift
-                if (sessionRef.current) {
-                   sessionRef.current.sendRealtimeInput({ media: pcmBlob });
-                }
+                sessionPromise.then(session => {
+                    if (isSocketOpenRef.current) {
+                        try {
+                           session.sendRealtimeInput({ media: pcmBlob });
+                        } catch (e) {
+                           console.error("Audio send error", e);
+                        }
+                    }
+                }).catch(err => console.error("Session not ready for audio", err));
               };
               
               source.connect(inputAnalyserRef.current!);
@@ -381,22 +434,22 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
             }
           },
           onmessage: async (msg: LiveServerMessage) => {
-              // Text Transcription
-              if (msg.serverContent?.inputTranscription) {
-                isResponseStoppedRef.current = false;
-                updateTranscript('user', msg.serverContent.inputTranscription.text, false);
-              }
+              // Text Transcription (Input & Output)
               if (msg.serverContent?.outputTranscription) {
                 updateTranscript('model', msg.serverContent.outputTranscription.text, false);
               }
+              if (msg.serverContent?.inputTranscription) {
+                updateTranscript('user', msg.serverContent.inputTranscription.text, false);
+              }
+
               if (msg.serverContent?.turnComplete) {
                 setTranscripts(prev => prev.map(t => ({ ...t, isComplete: true })));
-                isResponseStoppedRef.current = false;
+                // Do NOT reset isResponseStoppedRef here, to ensure manual stop persists until next turn
               }
 
               // Interruption
               if (msg.serverContent?.interrupted) {
-                isResponseStoppedRef.current = false;
+                isResponseStoppedRef.current = false; // Reset stop flag on interruption (new turn)
                 sourcesRef.current.forEach(source => { try { source.stop(); } catch (e) {} });
                 sourcesRef.current.clear();
                 if (outputAudioContextRef.current) {
@@ -510,8 +563,9 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
          
          // Start separate intervals for video sending (slower) and gesture detection (faster)
          frameIntervalRef.current = window.setInterval(() => {
-           if (videoRef.current && ctx && isVideoOnRef.current && isSocketOpenRef.current && sessionRef.current) {
-              const MAX_WIDTH = 640;
+           if (videoRef.current && ctx && isVideoOnRef.current && isSocketOpenRef.current) {
+              // Further reduced resolution for bandwidth optimization (240px width)
+              const MAX_WIDTH = 240;
               const ratio = videoRef.current.videoWidth / videoRef.current.videoHeight;
               canvasRef.current!.width = MAX_WIDTH;
               canvasRef.current!.height = MAX_WIDTH / ratio;
@@ -521,28 +575,40 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
               canvasRef.current!.toBlob(async (blob) => {
                 if (blob) {
                   const base64 = await blobToBase64(blob);
-                  if (sessionRef.current && isSocketOpenRef.current) {
-                    try { 
-                      sessionRef.current.sendRealtimeInput({ media: { mimeType: 'image/jpeg', data: base64 } }); 
-                    } catch (e) {}
-                  }
+                  // Use sessionPromise for video as well
+                  sessionPromise.then(session => {
+                      if (isSocketOpenRef.current) {
+                        try {
+                           session.sendRealtimeInput({ media: { mimeType: 'image/jpeg', data: base64 } });
+                        } catch (e) {
+                           console.error("Video send error", e);
+                        }
+                      }
+                  }).catch(e => console.error("Session not ready for video", e));
                 }
-              }, 'image/jpeg', 0.5);
+              }, 'image/jpeg', 0.4); // Quality 0.4
            }
-         }, 800);
+         }, 1000); // 1 FPS for video
          
-         // Gesture Detection Loop
-         gestureIntervalRef.current = window.setInterval(() => {
-             if (videoRef.current && isVideoOnRef.current) {
-                 const gesture = detectGesture(videoRef.current);
-                 if (gesture) {
-                     setDetectedGesture(gesture);
-                     handleGesture(gesture);
-                 } else {
-                     setDetectedGesture(null);
+         // Gesture Detection Loop - THROTTLED to 500ms
+         gestureIntervalRef.current = window.setInterval(async () => {
+             if (videoRef.current && isVideoOnRef.current && !gestureProcessingRef.current) {
+                 gestureProcessingRef.current = true;
+                 try {
+                     const gesture = detectGesture(videoRef.current);
+                     if (gesture) {
+                         setDetectedGesture(gesture);
+                         handleGesture(gesture);
+                     } else {
+                         setDetectedGesture(null);
+                     }
+                 } catch (e) {
+                     // Ignore gesture errors
+                 } finally {
+                     gestureProcessingRef.current = false;
                  }
              }
-         }, 150); // Run detection approx 6 times a second
+         }, 500); // Throttled to 500ms to allow main thread breathing room
       }
 
     } catch (err: any) {
@@ -550,7 +616,7 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
       setIsSessionActive(false);
       initializedRef.current = false;
     }
-  }, [user.name]);
+  }, [user.name, showCommandFeedback]);
 
   useEffect(() => {
     connectToGemini();
@@ -613,7 +679,7 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
 
              <button 
                onClick={stopSpeaking}
-               className="p-3 rounded-full bg-slate-800 text-white hover:bg-slate-700 border border-slate-700"
+               className="p-3 rounded-full bg-slate-800 text-white hover:bg-red-500/20 hover:text-red-400 border border-slate-700 transition-colors"
                title="Stop Speaking"
              >
                <Square className="w-5 h-5 fill-current"/>
@@ -626,28 +692,119 @@ export const CompanionMode: React.FC<CompanionModeProps> = ({ user }) => {
              >
                {isVideoOn ? <Video className="w-5 h-5"/> : <VideoOff className="w-5 h-5"/>}
              </button>
+
+             <button 
+               onClick={() => setShowHelp(true)}
+               className="p-3 rounded-full bg-slate-800 text-slate-400 hover:text-white hover:bg-slate-700 border border-slate-700 transition-colors"
+               title="Help & Controls"
+             >
+               <HelpCircle className="w-5 h-5"/>
+             </button>
           </div>
         </div>
 
+        {/* HELP OVERLAY */}
+        {showHelp && (
+            <div className="absolute inset-0 z-[100] bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200" onClick={() => setShowHelp(false)}>
+               <div className="bg-slate-900 border border-slate-700 rounded-3xl p-8 max-w-4xl w-full shadow-2xl relative overflow-hidden" onClick={e => e.stopPropagation()}>
+                  {/* Decorative Glow */}
+                  <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-600/10 rounded-full blur-3xl pointer-events-none"></div>
+                  
+                  <div className="flex items-center justify-between mb-8">
+                     <div>
+                       <h2 className="text-2xl font-bold text-white flex items-center gap-2">
+                         <Sparkles className="w-6 h-6 text-indigo-400"/> Neural Interface Guide
+                       </h2>
+                       <p className="text-slate-400 text-sm mt-1">Master your multimodal companion</p>
+                     </div>
+                     <button onClick={() => setShowHelp(false)} className="p-2 hover:bg-slate-800 rounded-full text-slate-400 hover:text-white">
+                        <X className="w-6 h-6" />
+                     </button>
+                  </div>
+
+                  <div className="grid md:grid-cols-2 gap-8">
+                      {/* Voice Section */}
+                      <div className="space-y-6">
+                         <h3 className="text-sm font-bold uppercase tracking-widest text-indigo-400 flex items-center gap-2">
+                           <Mic className="w-4 h-4" /> Voice Intelligence
+                         </h3>
+                         <div className="space-y-4">
+                            <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 flex gap-4 items-start">
+                               <div className="p-2 bg-indigo-500/20 rounded-lg text-indigo-400 mt-1"><Globe className="w-5 h-5"/></div>
+                               <div>
+                                  <h4 className="font-semibold text-slate-200">Real-time Search</h4>
+                                  <p className="text-sm text-slate-400 mt-1">Ask about news, facts, or weather.</p>
+                                  <code className="block mt-2 text-xs bg-slate-950 px-2 py-1 rounded text-emerald-400 font-mono">"Search for the latest tech news"</code>
+                               </div>
+                            </div>
+                            <div className="bg-slate-800/50 p-4 rounded-xl border border-slate-700/50 flex gap-4 items-start">
+                               <div className="p-2 bg-cyan-500/20 rounded-lg text-cyan-400 mt-1"><Eye className="w-5 h-5"/></div>
+                               <div>
+                                  <h4 className="font-semibold text-slate-200">Visual Analysis</h4>
+                                  <p className="text-sm text-slate-400 mt-1">Show objects to the camera for instant analysis.</p>
+                                  <code className="block mt-2 text-xs bg-slate-950 px-2 py-1 rounded text-emerald-400 font-mono">"What is this?" or "Scan this"</code>
+                               </div>
+                            </div>
+                         </div>
+                      </div>
+
+                      {/* Gestures Section */}
+                      <div className="space-y-6">
+                         <h3 className="text-sm font-bold uppercase tracking-widest text-purple-400 flex items-center gap-2">
+                           <Hand className="w-4 h-4" /> Gesture Control
+                         </h3>
+                         <div className="grid grid-cols-2 gap-3">
+                            <div className="bg-slate-800/50 p-3 rounded-xl border border-slate-700/50 flex flex-col items-center text-center hover:bg-slate-800 transition-colors">
+                               <div className="mb-2 p-2 bg-slate-900 rounded-full text-purple-400"><ChevronUp className="w-6 h-6"/></div>
+                               <span className="text-xs font-bold text-slate-300">POINT UP</span>
+                               <span className="text-[10px] text-slate-500 mt-1">Scroll Up</span>
+                            </div>
+                            <div className="bg-slate-800/50 p-3 rounded-xl border border-slate-700/50 flex flex-col items-center text-center hover:bg-slate-800 transition-colors">
+                               <div className="mb-2 p-2 bg-slate-900 rounded-full text-purple-400"><ChevronDown className="w-6 h-6"/></div>
+                               <span className="text-xs font-bold text-slate-300">VICTORY (PEACE)</span>
+                               <span className="text-[10px] text-slate-500 mt-1">Scroll Down</span>
+                            </div>
+                            <div className="bg-slate-800/50 p-3 rounded-xl border border-slate-700/50 flex flex-col items-center text-center hover:bg-slate-800 transition-colors">
+                               <div className="mb-2 p-2 bg-slate-900 rounded-full text-purple-400"><MousePointerClick className="w-6 h-6"/></div>
+                               <span className="text-xs font-bold text-slate-300">CLOSED FIST</span>
+                               <span className="text-[10px] text-slate-500 mt-1">Select / Scan</span>
+                            </div>
+                            <div className="bg-slate-800/50 p-3 rounded-xl border border-slate-700/50 flex flex-col items-center text-center hover:bg-slate-800 transition-colors">
+                               <div className="mb-2 p-2 bg-slate-900 rounded-full text-purple-400"><ThumbsDown className="w-6 h-6"/></div>
+                               <span className="text-xs font-bold text-slate-300">THUMB DOWN</span>
+                               <span className="text-[10px] text-slate-500 mt-1">Dismiss</span>
+                            </div>
+                         </div>
+                      </div>
+                  </div>
+               </div>
+            </div>
+        )}
+
         {/* Command Feedback Overlay */}
         {activeCommand && (
-          <div className="absolute top-28 left-1/2 transform -translate-x-1/2 z-50 pointer-events-none">
-             <div className="flex items-center gap-3 px-6 py-4 bg-slate-900/90 backdrop-blur-xl border border-indigo-500/30 rounded-2xl shadow-[0_0_40px_rgba(99,102,241,0.25)] animate-in fade-in zoom-in-95 duration-300">
+          <div className="absolute top-28 left-1/2 transform -translate-x-1/2 z-50 pointer-events-none w-full max-w-md px-6">
+             <div className="relative overflow-hidden flex items-center gap-4 px-6 py-4 bg-gradient-to-r from-indigo-600/90 to-purple-600/90 backdrop-blur-xl border-t border-white/20 rounded-2xl shadow-[0_0_50px_rgba(79,70,229,0.4)] animate-in fade-in zoom-in-95 slide-in-from-top-4 duration-300">
+                {/* Glowing border effect */}
+                <div className="absolute inset-0 border-2 border-white/10 rounded-2xl"></div>
+                
                 {activeCommand.type === 'search' && (
-                   <div className="relative">
-                      <div className="absolute inset-0 bg-blue-500 blur-lg opacity-50 animate-pulse"></div>
-                      <Globe className="w-6 h-6 text-blue-400 relative z-10 animate-spin-slow" />
+                   <div className="p-2 bg-white/20 rounded-full animate-pulse">
+                      <Globe className="w-6 h-6 text-white" />
                    </div>
                 )}
                 {activeCommand.type === 'scan' && (
-                   <div className="relative">
-                      <div className="absolute inset-0 bg-cyan-500 blur-lg opacity-50 animate-pulse"></div>
-                      <ScanEye className="w-6 h-6 text-cyan-400 relative z-10 animate-pulse" />
+                   <div className="p-2 bg-white/20 rounded-full animate-pulse">
+                      <ScanEye className="w-6 h-6 text-white" />
                    </div>
                 )}
-                <div className="flex flex-col">
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-indigo-300">Command Recognized</span>
-                  <span className="font-medium text-white text-lg tracking-tight shadow-black drop-shadow-md">{activeCommand.text}</span>
+                <div className="flex flex-col min-w-0">
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-indigo-100 flex items-center gap-1">
+                    <Command className="w-3 h-3" /> Voice Command
+                  </span>
+                  <span className="font-bold text-white text-xl tracking-tight truncate shadow-black drop-shadow-sm leading-tight">
+                    {activeCommand.text}
+                  </span>
                 </div>
              </div>
           </div>

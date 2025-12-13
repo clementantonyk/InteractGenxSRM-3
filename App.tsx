@@ -41,10 +41,10 @@ export default function App() {
            <span className="font-semibold text-lg tracking-tight">Alexis</span>
         </div>
         
-        <div className="flex bg-slate-800 p-1 rounded-full border border-slate-700">
+        <div className="flex bg-slate-800 p-1 rounded-full border border-slate-700 overflow-x-auto max-w-[60vw] scrollbar-hide">
           <button
             onClick={() => toggleMode(AppMode.WEB)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all whitespace-nowrap ${
               mode === AppMode.WEB 
                 ? 'bg-slate-700 text-white shadow-sm' 
                 : 'text-slate-400 hover:text-slate-200'
@@ -55,7 +55,7 @@ export default function App() {
           </button>
           <button
             onClick={() => toggleMode(AppMode.COMPANION)}
-            className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all ${
+            className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-medium transition-all whitespace-nowrap ${
               mode === AppMode.COMPANION 
                 ? 'bg-indigo-600 text-white shadow-sm' 
                 : 'text-slate-400 hover:text-slate-200'
@@ -66,18 +66,15 @@ export default function App() {
           </button>
         </div>
         
-        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-purple-500 to-indigo-500 flex items-center justify-center text-xs font-bold border border-white/10">
+        <div className="w-8 h-8 rounded-full bg-gradient-to-tr from-purple-500 to-indigo-500 flex items-center justify-center text-xs font-bold border border-white/10 shrink-0">
           {user?.name.charAt(0).toUpperCase()}
         </div>
       </div>
 
       {/* Main Viewport */}
       <main className="flex-1 relative overflow-y-auto">
-        {mode === AppMode.WEB ? (
-          <WebMode />
-        ) : (
-          user && <CompanionMode user={user} />
-        )}
+        {mode === AppMode.WEB && <WebMode />}
+        {mode === AppMode.COMPANION && user && <CompanionMode user={user} />}
       </main>
     </div>
   );

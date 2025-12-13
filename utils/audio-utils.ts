@@ -37,15 +37,44 @@ export async function decodeAudioData(
   return buffer;
 }
 
-export function createPcmBlob(data: Float32Array): { data: string; mimeType: string } {
-  const l = data.length;
+function downsampleBuffer(buffer: Float32Array, inputRate: number, outputRate: number): Float32Array {
+  if (outputRate >= inputRate) {
+    return buffer;
+  }
+  const sampleRateRatio = inputRate / outputRate;
+  const newLength = Math.round(buffer.length / sampleRateRatio);
+  const result = new Float32Array(newLength);
+  let offsetResult = 0;
+  let offsetBuffer = 0;
+  
+  while (offsetResult < result.length) {
+    const nextOffsetBuffer = Math.round((offsetResult + 1) * sampleRateRatio);
+    // Use simple averaging to prevent aliasing
+    let accum = 0, count = 0;
+    for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+      accum += buffer[i];
+      count++;
+    }
+    result[offsetResult] = count > 0 ? accum / count : 0;
+    offsetResult++;
+    offsetBuffer = nextOffsetBuffer;
+  }
+  return result;
+}
+
+export function createPcmBlob(data: Float32Array, inputSampleRate: number = 16000): { data: string; mimeType: string } {
+  const targetSampleRate = 16000;
+  const downsampledData = downsampleBuffer(data, inputSampleRate, targetSampleRate);
+  
+  const l = downsampledData.length;
   const int16 = new Int16Array(l);
   for (let i = 0; i < l; i++) {
-    int16[i] = Math.max(-1, Math.min(1, data[i])) * 32767; // Clamp and scale
+    int16[i] = Math.max(-1, Math.min(1, downsampledData[i])) * 32767; // Clamp and scale
   }
+  
   return {
     data: arrayBufferToBase64(int16.buffer),
-    mimeType: 'audio/pcm;rate=16000',
+    mimeType: `audio/pcm;rate=${targetSampleRate}`,
   };
 }
 
